@@ -12,21 +12,11 @@
       <div class="tabs">
         <button class="tab-button active" data-tab="play">Play</button>
         <button class="tab-button" data-tab="mods">Mods</button>
+        <button class="tab-button" data-tab="config">Config</button>
       </div>
 
       <div class="tab-content active" id="tab-play">
-        <div class="form">
-          <label for="username">Username</label>
-          <input id="username" type="text" placeholder="Player" />
-
-          <label for="version">Version</label>
-          <select id="version"></select>
-
-          <label for="java">Java Runtime</label>
-          <select id="java"></select>
-
-          <button id="play">Play</button>
-        </div>
+        <div class="play-info">Select a version and press Play to launch.</div>
       </div>
 
       <div class="tab-content" id="tab-mods">
@@ -52,12 +42,34 @@
         </div>
       </div>
 
+      <div class="tab-content" id="tab-config">
+        <div class="form">
+          <label for="java">Java Runtime</label>
+          <select id="java"></select>
+        </div>
+      </div>
+
       <div class="progress">
         <div class="progress-bar" id="progress-bar"></div>
       </div>
       <div class="progress-text" id="progress-text">Idle</div>
 
       <div class="logs" id="logs"></div>
+    </div>
+
+    <div class="footer">
+      <div class="footer-fields">
+        <div class="footer-field">
+          <label for="username">Username</label>
+          <input id="username" type="text" placeholder="Player" />
+        </div>
+
+        <div class="footer-field">
+          <label for="version">Version</label>
+          <select id="version"></select>
+        </div>
+      </div>
+      <button id="play">Play</button>
     </div>
 
     <div id="modal" class="modal hidden">

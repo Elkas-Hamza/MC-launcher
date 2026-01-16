@@ -12,6 +12,7 @@ body {
   padding: 24px;
   background: #252525;
   border-radius: 8px;
+  margin-bottom: 110px;
 }
 
 h1 {
@@ -23,6 +24,12 @@ h1 {
   grid-template-columns: 1fr;
   gap: 12px;
   margin-bottom: 16px;
+}
+
+.play-info {
+  font-size: 13px;
+  color: #cfcfcf;
+  margin-bottom: 12px;
 }
 
 .tabs {
@@ -220,6 +227,32 @@ button.secondary {
   font-size: 12px;
   line-height: 1.4;
   white-space: pre-wrap;
+}
+
+.footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #1a1a1a;
+  border-top: 1px solid #333;
+  padding: 12px 24px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.footer-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 12px;
+  flex: 1;
+}
+
+.footer-field {
+  display: grid;
+  gap: 6px;
 }
 
 .modal {
