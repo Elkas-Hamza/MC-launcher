@@ -79,6 +79,13 @@ h1 {
   margin-bottom: 12px;
 }
 
+.mods-filter {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  max-width: 280px;
+}
+
 .mods-search input {
   flex: 1;
 }

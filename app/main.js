@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const { spawn, spawnSync } = require('child_process');
+const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 
 const MANUAL_JAVA_PATH = '';
@@ -15,6 +16,8 @@ const minecraftDir = path.join(app.getPath('userData'), '.minecraft');
 const versionsDir = path.join(minecraftDir, 'versions');
 const librariesDir = path.join(minecraftDir, 'libraries');
 const assetsDir = path.join(minecraftDir, 'assets');
+const assetIndexesDir = path.join(assetsDir, 'indexes');
+const assetsObjectsDir = path.join(assetsDir, 'objects');
 const nativesBaseDir = path.join(minecraftDir, 'natives');
 const MODS_METADATA_FILE = '.launcher-mods.json';
 
@@ -63,10 +66,10 @@ function getVersionPaths(versionId) {
   const versionDir = path.join(versionsDir, versionId);
   return {
     versionDir,
-    librariesDir: path.join(versionDir, 'libraries'),
-    assetsDir: path.join(versionDir, 'assets'),
-    assetsIndexesDir: path.join(versionDir, 'assets', 'indexes'),
-    assetsObjectsDir: path.join(versionDir, 'assets', 'objects'),
+    librariesDir,
+    assetsDir,
+    assetsIndexesDir: assetIndexesDir,
+    assetsObjectsDir,
     nativesDir: path.join(versionDir, 'natives'),
     downloadsDir: path.join(versionDir, 'downloads'),
     configDir: path.join(versionDir, 'config'),
@@ -94,10 +97,6 @@ function ensureVersionRuntimeLayout(versionId, isModded) {
   ensureDir(paths.screenshotsDir);
   ensureDir(paths.serverResourcePacksDir);
   ensureDir(paths.shaderpacksDir);
-  ensureDir(paths.assetsDir);
-  ensureDir(paths.assetsIndexesDir);
-  ensureDir(paths.assetsObjectsDir);
-  ensureDir(paths.librariesDir);
   ensureDir(paths.nativesDir);
   if (isModded) {
     ensureDir(paths.modsDir);
@@ -182,42 +181,60 @@ function loadVersionJson(versionId) {
 }
 
 function resolveVersionChain(versionId) {
-  const libraries = [];
-  let mainClass;
-  let assetIndex;
-  let jarId;
+  const chain = [];
   let currentId = versionId;
   let currentJson = loadVersionJson(currentId);
 
   while (currentJson) {
-    if (Array.isArray(currentJson.libraries)) {
-      libraries.push(...currentJson.libraries);
-    }
-    if (!mainClass && currentJson.mainClass) {
-      mainClass = currentJson.mainClass;
-    }
-    if (!assetIndex && currentJson.assetIndex) {
-      assetIndex = currentJson.assetIndex;
-    }
-
-    if (!jarId) {
-      const candidateJarId = currentJson.jar || currentId;
-      const candidateJarPath = path.join(versionsDir, candidateJarId, `${candidateJarId}.jar`);
-      if (fs.existsSync(candidateJarPath)) {
-        jarId = candidateJarId;
-      }
-    }
-
+    chain.push({ id: currentId, json: currentJson });
     if (!currentJson.inheritsFrom) break;
     currentId = currentJson.inheritsFrom;
     currentJson = loadVersionJson(currentId);
+  }
+
+  chain.reverse();
+
+  const libraries = [];
+  const gameArguments = [];
+  const jvmArguments = [];
+  const jarIds = [];
+  let mainClass;
+  let assetIndex;
+
+  for (const { id, json } of chain) {
+    if (Array.isArray(json.libraries)) {
+      libraries.push(...json.libraries);
+    }
+    if (json.mainClass) {
+      mainClass = json.mainClass;
+    }
+    if (json.assetIndex) {
+      assetIndex = json.assetIndex;
+    }
+
+    if (json.arguments) {
+      if (Array.isArray(json.arguments.game)) {
+        gameArguments.push(...json.arguments.game);
+      }
+      if (Array.isArray(json.arguments.jvm)) {
+        jvmArguments.push(...json.arguments.jvm);
+      }
+    }
+
+    const candidateJarId = json.jar || id;
+    const candidateJarPath = path.join(versionsDir, candidateJarId, `${candidateJarId}.jar`);
+    if (fs.existsSync(candidateJarPath)) {
+      jarIds.push(candidateJarId);
+    }
   }
 
   return {
     libraries,
     mainClass,
     assetIndex,
-    jarId: jarId || versionId
+    jarIds: jarIds.length > 0 ? jarIds : [versionId],
+    gameArguments,
+    jvmArguments
   };
 }
 
@@ -320,10 +337,37 @@ function listInstalledMods(profileName) {
   return result;
 }
 
-function downloadFile(url, destination) {
+function computeSha1(filePath) {
   return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha1');
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+async function verifyFile(filePath, options = {}) {
+  if (!fs.existsSync(filePath)) return false;
+  const stats = fs.statSync(filePath);
+  if (options.expectedSize && stats.size !== options.expectedSize) {
+    return false;
+  }
+  if (options.expectedSha1) {
+    const sha1 = await computeSha1(filePath);
+    if (sha1.toLowerCase() !== options.expectedSha1.toLowerCase()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function downloadFile(url, destination, options = {}) {
+  return new Promise(async (resolve, reject) => {
     if (fs.existsSync(destination)) {
-      return resolve(false);
+      const ok = await verifyFile(destination, options);
+      if (ok) return resolve(false);
+      fs.unlinkSync(destination);
     }
 
     ensureDir(path.dirname(destination));
@@ -341,7 +385,16 @@ function downloadFile(url, destination) {
         return reject(new Error(`Failed to download ${url} (${res.statusCode})`));
       }
       res.pipe(fileStream);
-      fileStream.on('finish', () => fileStream.close(() => resolve(true)));
+      fileStream.on('finish', async () => {
+        fileStream.close(async () => {
+          const ok = await verifyFile(destination, options);
+          if (!ok) {
+            if (fs.existsSync(destination)) fs.unlinkSync(destination);
+            return reject(new Error(`Downloaded file failed verification: ${destination}`));
+          }
+          resolve(true);
+        });
+      });
     });
 
     request.on('error', (error) => {
@@ -384,10 +437,20 @@ async function getManifest() {
   return cachedManifest;
 }
 
+function isForgeLikeLibrary(libraryName) {
+  if (!libraryName) return false;
+  return libraryName.startsWith('net.minecraftforge:forge:')
+    || libraryName.startsWith('net.neoforged:neoforge:');
+}
+
 function buildLibraryPath(library, targetLibrariesDir) {
   const librariesRoot = targetLibrariesDir || librariesDir;
   if (library.downloads?.artifact?.path) {
-    return path.join(librariesRoot, library.downloads.artifact.path);
+    const artifactPath = library.downloads.artifact.path;
+    if (artifactPath.endsWith('-client.jar') && isForgeLikeLibrary(library.name)) {
+      return null;
+    }
+    return path.join(librariesRoot, artifactPath);
   }
   if (!library.name) return null;
   const artifactPath = buildMavenArtifactPath(library.name);
@@ -433,15 +496,42 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
   for (const library of allowedLibraries) {
     const artifact = library.downloads?.artifact;
     if (artifact && artifact.path) {
-      artifacts.push({
-        url: artifact.url,
-        path: path.join(targetLibrariesDir, artifact.path)
-      });
+      let artifactPath = artifact.path;
+
+      if (artifactPath.endsWith('-client.jar')) {
+        if (isForgeLikeLibrary(library.name)) {
+          continue;
+        }
+        artifactPath = artifactPath.replace('-client.jar', '.jar');
+      }
+
+      if (isForgeLikeLibrary(library.name)) {
+        const mavenPath = buildMavenArtifactPath(library.name);
+        if (mavenPath) {
+          artifactPath = mavenPath;
+        }
+      }
+
+      let artifactUrl = (typeof artifact.url === 'string' && artifact.url.trim().length > 0)
+        ? artifact.url.trim()
+        : `https://libraries.minecraft.net/${artifactPath}`;
+
+      if (artifact.url && artifact.url.endsWith('-client.jar')) {
+        artifactUrl = `https://libraries.minecraft.net/${artifactPath}`;
+      }
+        artifacts.push({
+          url: artifactUrl,
+        path: path.join(targetLibrariesDir, artifactPath),
+          sha1: artifact.sha1,
+          size: artifact.size
+        });
     } else if (library.name) {
       const artifactPath = buildMavenArtifactPath(library.name);
       if (artifactPath) {
-        const baseUrl = library.url || 'https://libraries.minecraft.net/';
-        const url = `${baseUrl.replace(/\/$/, '')}/${artifactPath}`;
+        const rawBaseUrl = (typeof library.url === 'string' && library.url.trim().length > 0)
+          ? library.url.trim()
+          : 'https://libraries.minecraft.net/';
+        const url = `${rawBaseUrl.replace(/\/$/, '')}/${artifactPath}`;
         artifacts.push({
           url,
           path: path.join(targetLibrariesDir, artifactPath)
@@ -454,7 +544,9 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
       natives.push({
         url: native.url,
         path: path.join(targetLibrariesDir, native.path),
-        extract: library.extract
+        extract: library.extract,
+        sha1: native.sha1,
+        size: native.size
       });
     }
   }
@@ -464,14 +556,14 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
   reportProgress('Downloading libraries', completed, total);
 
   for (const item of artifacts) {
-    await downloadFile(item.url, item.path);
+    await downloadFile(item.url, item.path, { expectedSha1: item.sha1, expectedSize: item.size });
     completed += 1;
     reportProgress('Downloading libraries', completed, total);
   }
 
   ensureDir(targetNativesDir);
   for (const item of natives) {
-    await downloadFile(item.url, item.path);
+    await downloadFile(item.url, item.path, { expectedSha1: item.sha1, expectedSize: item.size });
     const exclude = item.extract?.exclude || [];
     await extractNativeJar(item.path, targetNativesDir, exclude);
     completed += 1;
@@ -479,15 +571,15 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
   }
 }
 
-async function downloadAssets(assetIndex, targetAssetsDir, targetAssetsIndexesDir, targetAssetsObjectsDir) {
+async function downloadAssets(assetIndex) {
   if (!assetIndex?.url) return;
 
   log('Downloading asset index...');
   const assetIndexJson = await fetchJson(assetIndex.url);
 
-  ensureDir(targetAssetsIndexesDir);
+  ensureDir(assetIndexesDir);
 
-  const assetsIndexPath = path.join(targetAssetsIndexesDir, `${assetIndex.id}.json`);
+  const assetsIndexPath = path.join(assetIndexesDir, `${assetIndex.id}.json`);
 
   fs.writeFileSync(assetsIndexPath, JSON.stringify(assetIndexJson, null, 2));
 
@@ -508,15 +600,15 @@ async function downloadAssets(assetIndex, targetAssetsDir, targetAssetsIndexesDi
       const object = entries[index];
       const hash = object.hash;
       const subDir = hash.substring(0, 2);
-      const objectPath = path.join(targetAssetsObjectsDir, subDir, hash);
+      const objectPath = path.join(assetsObjectsDir, subDir, hash);
       const url = `https://resources.download.minecraft.net/${subDir}/${hash}`;
-      await downloadFile(url, objectPath);
+      await downloadFile(url, objectPath, { expectedSha1: hash, expectedSize: object.size });
       completed += 1;
       reportProgress('Downloading assets', completed, total);
     }
   }
 
-  ensureDir(targetAssetsObjectsDir);
+  ensureDir(assetsObjectsDir);
   const workers = Array.from({ length: concurrency }, () => worker());
   await Promise.all(workers);
 }
@@ -624,6 +716,56 @@ function getLauncherMetadata(versionJson) {
   return null;
 }
 
+function resolveArguments(argumentsList, variables) {
+  const resolved = [];
+
+  for (const arg of argumentsList) {
+    if (typeof arg === 'string') {
+      resolved.push(replaceVariables(arg, variables));
+    } else if (typeof arg === 'object' && arg.rules && arg.value) {
+      if (evaluateRules(arg.rules)) {
+        const values = Array.isArray(arg.value) ? arg.value : [arg.value];
+        resolved.push(...values.map(v => replaceVariables(v, variables)));
+      }
+    }
+  }
+
+  return resolved;
+}
+
+function replaceVariables(str, variables) {
+  return str.replace(/\$\{([^}]+)\}/g, (match, key) => {
+    return variables[key] !== undefined ? variables[key] : match;
+  });
+}
+
+function evaluateRules(rules) {
+  for (const rule of rules) {
+    const action = rule.action || 'allow';
+    let matches = true;
+
+    if (rule.os) {
+      const osName = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'osx' : 'linux';
+      if (rule.os.name && rule.os.name !== osName) {
+        matches = false;
+      }
+    }
+
+    if (rule.features) {
+      matches = false;
+    }
+
+    if (action === 'allow' && matches) {
+      return true;
+    }
+    if (action === 'disallow' && matches) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 function formatLoaderName(loader) {
   if (!loader) return '';
   if (loader === 'neoforge') return 'NeoForge';
@@ -662,14 +804,17 @@ async function downloadVersionInternal(versionId) {
 
   const clientJarPath = path.join(versionDir, `${versionId}.jar`);
   reportProgress('Downloading client', 0, 1);
-  await downloadFile(clientJar.url, clientJarPath);
+  await downloadFile(clientJar.url, clientJarPath, {
+    expectedSha1: clientJar.sha1,
+    expectedSize: clientJar.size
+  });
   reportProgress('Downloading client', 1, 1);
 
   log('Downloading libraries...');
-  await downloadLibraries(versionJson.libraries, versionId, paths.librariesDir, paths.nativesDir);
+  await downloadLibraries(versionJson.libraries, versionId, librariesDir, paths.nativesDir);
 
   log('Downloading assets...');
-  await downloadAssets(versionJson.assetIndex, paths.assetsDir, paths.assetsIndexesDir, paths.assetsObjectsDir);
+  await downloadAssets(versionJson.assetIndex);
 
   log('Download complete.');
 }
@@ -729,10 +874,13 @@ async function getQuiltProfile(baseVersion) {
 }
 
 async function getForgeVersionForMc(baseVersion) {
-  const metadata = await fetchText('https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml');
-  const versions = Array.from(metadata.matchAll(/<version>([^<]+)<\/version>/g)).map((match) => match[1]);
-  const matching = versions.filter((version) => version.startsWith(`${baseVersion}-`));
-  return matching.length > 0 ? matching[matching.length - 1] : null;
+  const promotions = await fetchJson('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json');
+  const promos = promotions?.promos || {};
+  const recommendedKey = `${baseVersion}-recommended`;
+  const latestKey = `${baseVersion}-latest`;
+  const forgeVersion = promos[recommendedKey] || promos[latestKey];
+  if (!forgeVersion) return null;
+  return `${baseVersion}-${forgeVersion}`;
 }
 
 async function getNeoForgeVersionForMc(baseVersion) {
@@ -752,6 +900,31 @@ async function extractVersionJsonFromInstaller(installerPath) {
   return JSON.parse(content);
 }
 
+function extractForgeJarFromInstaller(installerPath, loaderType, version, targetJarPath) {
+  const zip = new AdmZip(installerPath);
+  const prefix = loaderType === 'neoforge' ? 'neoforge' : 'forge';
+  const jarNames = [
+    `${prefix}-${version}.jar`,
+    `${prefix}-${version}-universal.jar`,
+    `${prefix}-${version}-client.jar`
+  ];
+
+  const entries = zip.getEntries();
+  let selected = null;
+  for (const name of jarNames) {
+    selected = entries.find((entry) => entry.entryName.endsWith(name));
+    if (selected) break;
+  }
+
+  if (!selected) return false;
+
+  const buffer = zip.readFile(selected);
+  if (!buffer) return false;
+  ensureDir(path.dirname(targetJarPath));
+  fs.writeFileSync(targetJarPath, buffer);
+  return true;
+}
+
 async function createForgeProfile(baseVersion, loaderType) {
   const version = loaderType === 'neoforge'
     ? await getNeoForgeVersionForMc(baseVersion)
@@ -769,7 +942,7 @@ async function createForgeProfile(baseVersion, loaderType) {
   log(`Downloading ${loaderType} installer...`);
   await downloadFile(installerUrl, installerPath);
   const profileJson = await extractVersionJsonFromInstaller(installerPath);
-  return profileJson;
+  return { profileJson, installerPath, version };
 }
 
 async function createModdedProfile({ customName, baseVersion, loader }) {
@@ -789,12 +962,14 @@ async function createModdedProfile({ customName, baseVersion, loader }) {
   log(`Creating ${formatLoaderName(loader)} profile...`);
 
   let profileJson;
+  let forgeInstaller = null;
   if (loader === 'fabric') {
     profileJson = await getFabricProfile(baseVersion);
   } else if (loader === 'quilt') {
     profileJson = await getQuiltProfile(baseVersion);
   } else if (loader === 'forge' || loader === 'neoforge') {
-    profileJson = await createForgeProfile(baseVersion, loader);
+    forgeInstaller = await createForgeProfile(baseVersion, loader);
+    profileJson = forgeInstaller.profileJson;
   } else {
     throw new Error('Unsupported loader');
   }
@@ -816,13 +991,23 @@ async function createModdedProfile({ customName, baseVersion, loader }) {
 
   const baseJarPath = path.join(versionsDir, baseVersion, `${baseVersion}.jar`);
   const targetJarPath = path.join(versionDir, `${customName}.jar`);
-  if (fs.existsSync(baseJarPath) && !fs.existsSync(targetJarPath)) {
+  if (forgeInstaller) {
+    const extracted = extractForgeJarFromInstaller(
+      forgeInstaller.installerPath,
+      loader,
+      forgeInstaller.version,
+      targetJarPath
+    );
+    if (!extracted && fs.existsSync(baseJarPath) && !fs.existsSync(targetJarPath)) {
+      fs.copyFileSync(baseJarPath, targetJarPath);
+    }
+  } else if (fs.existsSync(baseJarPath) && !fs.existsSync(targetJarPath)) {
     fs.copyFileSync(baseJarPath, targetJarPath);
   }
 
   log('Downloading libraries...');
   const resolved = resolveVersionChain(customName);
-  await downloadLibraries(resolved.libraries, customName, paths.librariesDir, paths.nativesDir);
+  await downloadLibraries(resolved.libraries, customName, librariesDir, paths.nativesDir);
 
   log('Modded profile created.');
   return { id: customName, loader, baseVersion };
@@ -857,7 +1042,10 @@ async function installModrinthMod({ projectId, mcVersion, loader, profileName, t
 
   const destination = path.join(modsDir, file.filename);
   log(`Installing mod: ${title || version.name || projectId}...`);
-  await downloadFile(file.url, destination);
+  await downloadFile(file.url, destination, {
+    expectedSha1: file.hashes?.sha1 || null,
+    expectedSize: file.size || null
+  });
   const metadata = loadModsMetadata(profileName);
   metadata[projectId] = {
     title: title || version.name || projectId,
@@ -972,29 +1160,30 @@ ipcMain.handle('launch-game', async (_event, payload) => {
 
   if (Array.isArray(resolved.libraries) && resolved.libraries.length > 0) {
     log('Ensuring libraries...');
-    await downloadLibraries(resolved.libraries, versionId, paths.librariesDir, paths.nativesDir);
+    await downloadLibraries(resolved.libraries, versionId, librariesDir, paths.nativesDir);
   }
 
   if (resolved.assetIndex?.url) {
     log('Ensuring assets...');
-    await downloadAssets(resolved.assetIndex, paths.assetsDir, paths.assetsIndexesDir, paths.assetsObjectsDir);
+    await downloadAssets(resolved.assetIndex);
   }
 
   const classpathEntries = [];
 
   for (const library of resolved.libraries.filter(isLibraryAllowed)) {
-    const libPath = buildLibraryPath(library, paths.librariesDir);
+    const libPath = buildLibraryPath(library, librariesDir);
     if (libPath && fs.existsSync(libPath)) {
       classpathEntries.push(libPath);
     }
   }
 
-  const versionJarPath = path.join(versionsDir, resolved.jarId, `${resolved.jarId}.jar`);
-  if (!fs.existsSync(versionJarPath)) {
-    throw new Error('Base game jar not found. Please download the base version first.');
+  for (const jarId of resolved.jarIds) {
+    const jarPath = path.join(versionsDir, jarId, `${jarId}.jar`);
+    if (!fs.existsSync(jarPath)) {
+      throw new Error(`Jar not found: ${jarPath}. Please download the version first.`);
+    }
+    classpathEntries.push(jarPath);
   }
-
-  classpathEntries.push(versionJarPath);
 
   const classpathSeparator = process.platform === 'win32' ? ';' : ':';
   const classpath = classpathEntries.join(classpathSeparator);
@@ -1004,34 +1193,69 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   const meta = getLauncherMetadata(versionJson);
   const modsDir = meta?.modded ? paths.modsDir : null;
 
+  const variables = {
+    auth_player_name: username,
+    version_name: versionId,
+    game_directory: paths.versionDir,
+    assets_root: paths.assetsDir,
+    assets_index_name: resolved.assetIndex?.id || versionId,
+    auth_uuid: '00000000-0000-0000-0000-000000000000',
+    auth_access_token: '0',
+    user_type: 'legacy',
+    version_type: 'release',
+    natives_directory: nativesDir,
+    launcher_name: 'minecraft-launcher',
+    launcher_version: '1.0',
+    classpath_separator: classpathSeparator
+  };
+
+  const jvmArgs = [];
+  
+  if (resolved.jvmArguments && resolved.jvmArguments.length > 0) {
+    const resolvedJvm = resolveArguments(resolved.jvmArguments, variables);
+    for (const arg of resolvedJvm) {
+      if (arg !== '-cp' && !arg.includes('${classpath}')) {
+        jvmArgs.push(arg);
+      }
+    }
+  } else {
+    jvmArgs.push('-Xmx2G', '-Xms1G');
+    jvmArgs.push(`-Djava.library.path=${nativesDir}`);
+  }
+
+  if (modsDir && meta?.loader === 'fabric') {
+    jvmArgs.push(`-Dfabric.modPath=${modsDir}`);
+  }
+  if (modsDir && meta?.loader === 'quilt') {
+    jvmArgs.push(`-Dquilt.modPath=${modsDir}`);
+  }
+  if (modsDir && (meta?.loader === 'forge' || meta?.loader === 'neoforge')) {
+    jvmArgs.push(`-Dfml.modsFolder=${modsDir}`);
+  }
+
+  const gameArgs = [];
+  
+  if (resolved.gameArguments && resolved.gameArguments.length > 0) {
+    gameArgs.push(...resolveArguments(resolved.gameArguments, variables));
+  } else {
+    gameArgs.push(
+      '--username', username,
+      '--version', versionId,
+      '--gameDir', paths.versionDir,
+      '--assetsDir', paths.assetsDir,
+      '--assetIndex', resolved.assetIndex?.id || versionId,
+      '--uuid', '00000000-0000-0000-0000-000000000000',
+      '--accessToken', '0',
+      '--userType', 'legacy'
+    );
+  }
+
   const args = [
-    '-Xmx2G',
-    '-Xms1G',
-    `-Djava.library.path=${nativesDir}`,
-    ...(modsDir && meta?.loader === 'fabric' ? [`-Dfabric.modPath=${modsDir}`] : []),
-    ...(modsDir && meta?.loader === 'quilt' ? [`-Dquilt.modPath=${modsDir}`] : []),
-    ...(modsDir && (meta?.loader === 'forge' || meta?.loader === 'neoforge')
-      ? [`-Dfml.modsFolder=${modsDir}`]
-      : []),
+    ...jvmArgs,
     '-cp',
     classpath,
     resolved.mainClass || 'net.minecraft.client.main.Main',
-    '--username',
-    username,
-    '--version',
-    versionId,
-    '--gameDir',
-    paths.versionDir,
-    '--assetsDir',
-    paths.assetsDir,
-    '--assetIndex',
-    resolved.assetIndex?.id || versionId,
-    '--uuid',
-    '00000000-0000-0000-0000-000000000000',
-    '--accessToken',
-    '0',
-    '--userType',
-    'legacy'
+    ...gameArgs
   ];
 
   log('Launching game...');

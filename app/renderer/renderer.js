@@ -12,6 +12,7 @@ const modSearchInput = document.getElementById('mod-search');
 const modSearchButton = document.getElementById('mod-search-btn');
 const modsList = document.getElementById('mods-list');
 const installedModsList = document.getElementById('installed-mods');
+const moddedVersionSelect = document.getElementById('modded-version');
 const modal = document.getElementById('modal');
 const moddedNameInput = document.getElementById('modded-name');
 const moddedBaseSelect = document.getElementById('modded-base');
@@ -26,6 +27,7 @@ const USERNAME_STORAGE_KEY = 'minecraftLauncher.username';
 let cachedReleaseVersions = [];
 let currentVersionInfo = null;
 let installedMods = [];
+let availableModdedVersions = [];
 
 modSearchInput.disabled = true;
 modSearchButton.disabled = true;
@@ -55,11 +57,14 @@ function setProgress(stage, current, total) {
 
 function setActiveTab(tab) {
   tabButtons.forEach((button) => {
-    button.classList.toggle('active', button.dataset.tab === tab);
+    button.classList.remove('active');
   });
-  tabPlay.classList.toggle('active', tab === 'play');
-  tabMods.classList.toggle('active', tab === 'mods');
-  tabConfig.classList.toggle('active', tab === 'config');
+  document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+
+  document.querySelectorAll('.tab-content').forEach((content) => {
+    content.classList.remove('active');
+  });
+  document.getElementById(`tab-${tab}`).classList.add('active');
   logs.style.display = tab === 'play' ? 'block' : 'none';
 }
 
@@ -147,12 +152,14 @@ async function refreshVersionInfo() {
   try {
     currentVersionInfo = await window.minecraftLauncher.getVersionInfo(versionId);
     if (currentVersionInfo.isModded) {
-      document.querySelector('[data-tab="mods"]').style.display = 'inline-flex';
-      tabMods.style.display = 'block';
       const loaderName = formatLoaderName(currentVersionInfo.loader);
       modsInfo.textContent = `Managing mods for ${currentVersionInfo.id} (${loaderName} ${currentVersionInfo.baseVersion})`;
       modSearchInput.disabled = false;
       modSearchButton.disabled = false;
+      moddedVersionSelect.disabled = false;
+      if (moddedVersionSelect.value !== currentVersionInfo.id) {
+        moddedVersionSelect.value = currentVersionInfo.id;
+      }
       await loadInstalledMods();
     } else {
       modsInfo.textContent = 'Select a modded version to manage mods.';
@@ -161,10 +168,37 @@ async function refreshVersionInfo() {
       modsList.innerHTML = '';
       installedModsList.innerHTML = '';
       installedMods = [];
+      moddedVersionSelect.disabled = availableModdedVersions.length === 0;
       setActiveTab('play');
     }
   } catch (error) {
     log(`Failed to read version info: ${error.message}`);
+  }
+}
+
+async function loadModdedVersions() {
+  try {
+    const allVersions = await window.minecraftLauncher.fetchAllVersions();
+    availableModdedVersions = (allVersions || []).filter((version) => version.isCustom);
+    moddedVersionSelect.innerHTML = '';
+    if (availableModdedVersions.length === 0) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'No modded versions';
+      moddedVersionSelect.appendChild(option);
+      moddedVersionSelect.disabled = true;
+      return;
+    }
+
+    moddedVersionSelect.disabled = false;
+    availableModdedVersions.forEach((version) => {
+      const option = document.createElement('option');
+      option.value = version.id;
+      option.textContent = version.id;
+      moddedVersionSelect.appendChild(option);
+    });
+  } catch (error) {
+    log(`Failed to fetch modded versions: ${error.message}`);
   }
 }
 
@@ -301,8 +335,10 @@ createModdedConfirm.addEventListener('click', async () => {
       loader
     });
     await loadVersions();
+    await loadModdedVersions();
     versionSelect.value = result.id;
     await refreshVersionInfo();
+    moddedVersionSelect.value = result.id;
     setActiveTab('mods');
     closeModal();
   } catch (error) {
@@ -399,6 +435,18 @@ installedModsList.addEventListener('click', async (event) => {
   }
 });
 
+moddedVersionSelect.addEventListener('change', async () => {
+  const versionId = moddedVersionSelect.value;
+  if (!versionId) return;
+  versionSelect.value = versionId;
+  versionSelect.dispatchEvent(new Event('change'));
+  await refreshVersionInfo();
+  if (currentVersionInfo?.isModded) {
+    await loadInstalledMods();
+  }
+});
+
 loadVersions();
 loadJava();
 refreshVersionInfo();
+loadModdedVersions();
