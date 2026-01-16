@@ -243,9 +243,15 @@ button.secondary {
   gap: 16px;
 }
 
+.footer-progress {
+  display: grid;
+  gap: 6px;
+  width: 220px;
+}
+
 .footer-fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
   gap: 12px;
   flex: 1;
 }

@@ -5,6 +5,7 @@ const playButton = document.getElementById('play');
 const tabButtons = document.querySelectorAll('.tab-button');
 const tabPlay = document.getElementById('tab-play');
 const tabMods = document.getElementById('tab-mods');
+const tabConfig = document.getElementById('tab-config');
 const createModdedButton = document.getElementById('create-modded');
 const modsInfo = document.getElementById('mods-info');
 const modSearchInput = document.getElementById('mod-search');
@@ -58,6 +59,8 @@ function setActiveTab(tab) {
   });
   tabPlay.classList.toggle('active', tab === 'play');
   tabMods.classList.toggle('active', tab === 'mods');
+  tabConfig.classList.toggle('active', tab === 'config');
+  logs.style.display = tab === 'play' ? 'block' : 'none';
 }
 
 function openModal() {
