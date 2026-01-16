@@ -1,0 +1,252 @@
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  background: #1b1b1b;
+  color: #f0f0f0;
+  margin: 0;
+  padding: 0;
+}
+
+.container {
+  max-width: 800px;
+  margin: 24px auto;
+  padding: 24px;
+  background: #252525;
+  border-radius: 8px;
+}
+
+h1 {
+  margin-top: 0;
+}
+
+.form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.tab-button {
+  background: #2f2f2f;
+  color: #f0f0f0;
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+}
+
+.tab-button.active {
+  background: #3ea6ff;
+  color: #0b0b0b;
+}
+
+.tab-content {
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+.mods-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.mods-info {
+  font-size: 13px;
+  color: #cfcfcf;
+}
+
+.mods-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mods-search input {
+  flex: 1;
+}
+
+.mods-list {
+  display: grid;
+  gap: 10px;
+}
+
+.mods-layout {
+  display: grid;
+  grid-template-columns: 1fr 240px;
+  gap: 16px;
+}
+
+.mods-sidebar {
+  background: #1e1e1e;
+  padding: 12px;
+  border-radius: 6px;
+  height: fit-content;
+}
+
+.mods-sidebar h3 {
+  margin-top: 0;
+}
+
+.installed-mods {
+  display: grid;
+  gap: 10px;
+}
+
+.mod-item {
+  background: #1e1e1e;
+  padding: 10px;
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.mod-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  background: #2a2a2a;
+  object-fit: cover;
+}
+
+.mod-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mod-author {
+  font-size: 11px;
+  color: #9d9d9d;
+}
+
+.mod-item h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.mod-item p {
+  margin: 0;
+  font-size: 12px;
+  color: #bdbdbd;
+}
+
+.mod-actions button {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.installed-mod-item {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.installed-mod-item img {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.installed-mod-item button {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+input,
+select,
+button {
+  padding: 10px;
+  border-radius: 4px;
+  border: none;
+}
+
+button {
+  background: #3ea6ff;
+  color: #0b0b0b;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #444;
+  color: #f0f0f0;
+}
+
+.progress {
+  height: 16px;
+  width: 100%;
+  background: #333;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: #4caf50;
+  transition: width 0.2s ease;
+}
+
+.progress-text {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #cfcfcf;
+}
+
+.logs {
+  margin-top: 16px;
+  height: 260px;
+  overflow-y: auto;
+  background: #121212;
+  padding: 12px;
+  border-radius: 6px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-content {
+  background: #252525;
+  padding: 20px;
+  border-radius: 8px;
+  width: 400px;
+  display: grid;
+  gap: 10px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

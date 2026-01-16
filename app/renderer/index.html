@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Minecraft Offline Launcher</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Minecraft Offline Launcher</h1>
+      <div class="tabs">
+        <button class="tab-button active" data-tab="play">Play</button>
+        <button class="tab-button" data-tab="mods">Mods</button>
+      </div>
+
+      <div class="tab-content active" id="tab-play">
+        <div class="form">
+          <label for="username">Username</label>
+          <input id="username" type="text" placeholder="Player" />
+
+          <label for="version">Version</label>
+          <select id="version"></select>
+
+          <label for="java">Java Runtime</label>
+          <select id="java"></select>
+
+          <button id="play">Play</button>
+        </div>
+      </div>
+
+      <div class="tab-content" id="tab-mods">
+        <div class="mods-header">
+          <button id="create-modded">Create Modded Version</button>
+          <div class="mods-info" id="mods-info">Select a modded version to manage mods.</div>
+        </div>
+
+        <div class="mods-layout">
+          <div class="mods-main">
+            <div class="mods-search">
+              <input id="mod-search" type="text" placeholder="Search mods..." />
+              <button id="mod-search-btn">Search</button>
+            </div>
+
+            <div id="mods-list" class="mods-list"></div>
+          </div>
+
+          <div class="mods-sidebar">
+            <h3>Installed Mods</h3>
+            <div id="installed-mods" class="installed-mods"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="progress">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+      <div class="progress-text" id="progress-text">Idle</div>
+
+      <div class="logs" id="logs"></div>
+    </div>
+
+    <div id="modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Create Modded Version</h2>
+        <label for="modded-name">Custom version name</label>
+        <input id="modded-name" type="text" placeholder="MyModpack" />
+
+        <label for="modded-base">Base Minecraft version</label>
+        <select id="modded-base"></select>
+
+        <label for="modded-loader">Loader</label>
+        <select id="modded-loader">
+          <option value="fabric">Fabric</option>
+          <option value="forge">Forge</option>
+          <option value="quilt">Quilt</option>
+          <option value="neoforge">NeoForge</option>
+        </select>
+
+        <div class="modal-actions">
+          <button id="create-modded-confirm">Create</button>
+          <button id="create-modded-cancel" class="secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
