@@ -2,6 +2,14 @@ const versionSelect = document.getElementById('version');
 const usernameInput = document.getElementById('username');
 const javaSelect = document.getElementById('java');
 const playButton = document.getElementById('play');
+const moddedVersionSettingsButton = document.getElementById('modded-version-settings');
+function updateVersionSettingsButton() {
+  const isModded = Boolean(currentVersionInfo?.isModded);
+  moddedVersionSettingsButton.disabled = !isModded;
+  moddedVersionSettingsButton.title = isModded
+    ? `Settings for ${currentVersionInfo.id}`
+    : 'Select a modded version to edit settings';
+}
 const tabButtons = document.querySelectorAll('.tab-button');
 const tabPlay = document.getElementById('tab-play');
 const tabMods = document.getElementById('tab-mods');
@@ -14,11 +22,20 @@ const modsList = document.getElementById('mods-list');
 const installedModsList = document.getElementById('installed-mods');
 const moddedVersionSelect = document.getElementById('modded-version');
 const modal = document.getElementById('modal');
+const moddedSettingsModal = document.getElementById('modded-settings-modal');
 const moddedNameInput = document.getElementById('modded-name');
 const moddedBaseSelect = document.getElementById('modded-base');
 const moddedLoaderSelect = document.getElementById('modded-loader');
 const createModdedConfirm = document.getElementById('create-modded-confirm');
 const createModdedCancel = document.getElementById('create-modded-cancel');
+const moddedSettingsTitle = document.getElementById('modded-settings-title');
+const moddedSettingsVersion = document.getElementById('modded-settings-version');
+const moddedSettingsLoader = document.getElementById('modded-settings-loader');
+const moddedRenameInput = document.getElementById('modded-rename');
+const moddedRenameConfirm = document.getElementById('modded-rename-confirm');
+const moddedOpenFolder = document.getElementById('modded-open-folder');
+const moddedDelete = document.getElementById('modded-delete');
+const moddedSettingsClose = document.getElementById('modded-settings-close');
 const logs = document.getElementById('logs');
 const progressBar = document.getElementById('progress-bar');
 const progressText = document.getElementById('progress-text');
@@ -68,6 +85,7 @@ function setActiveTab(tab) {
   logs.style.display = tab === 'play' ? 'block' : 'none';
 }
 
+
 function openModal() {
   modal.classList.remove('hidden');
   moddedNameInput.value = '';
@@ -75,6 +93,29 @@ function openModal() {
 
 function closeModal() {
   modal.classList.add('hidden');
+}
+
+async function openModdedSettings(version) {
+  if (!version) return;
+  moddedSettingsModal.dataset.versionId = version.id;
+  moddedSettingsTitle.textContent = `${version.id}`;
+  moddedRenameInput.value = version.id;
+  moddedSettingsVersion.textContent = 'Loading...';
+  moddedSettingsLoader.textContent = 'Loading...';
+  moddedSettingsModal.classList.remove('hidden');
+  try {
+    const info = await window.minecraftLauncher.getVersionInfo(version.id);
+    moddedSettingsVersion.textContent = info?.baseVersion || 'Unknown';
+    moddedSettingsLoader.textContent = info?.loader ? formatLoaderName(info.loader) : 'Unknown';
+  } catch (error) {
+    moddedSettingsVersion.textContent = 'Unknown';
+    moddedSettingsLoader.textContent = 'Unknown';
+  }
+}
+
+function closeModdedSettings() {
+  moddedSettingsModal.classList.add('hidden');
+  delete moddedSettingsModal.dataset.versionId;
 }
 
 function renderModsList(mods = []) {
@@ -151,6 +192,7 @@ async function refreshVersionInfo() {
   if (!versionId) return;
   try {
     currentVersionInfo = await window.minecraftLauncher.getVersionInfo(versionId);
+    updateVersionSettingsButton();
     if (currentVersionInfo.isModded) {
       const loaderName = formatLoaderName(currentVersionInfo.loader);
       modsInfo.textContent = `Managing mods for ${currentVersionInfo.id} (${loaderName} ${currentVersionInfo.baseVersion})`;
@@ -247,6 +289,7 @@ async function loadVersions() {
 
     log('Versions loaded.');
     await refreshVersionInfo();
+    updateVersionSettingsButton();
   } catch (error) {
     log(`Failed to fetch versions: ${error.message}`);
   }
@@ -311,12 +354,70 @@ versionSelect.addEventListener('change', () => {
   refreshVersionInfo();
 });
 
+moddedVersionSettingsButton.addEventListener('click', () => {
+  if (!currentVersionInfo?.isModded) return;
+  openModdedSettings({ id: currentVersionInfo.id });
+});
+
+
 createModdedButton.addEventListener('click', () => {
   openModal();
 });
 
 createModdedCancel.addEventListener('click', () => {
   closeModal();
+});
+
+moddedSettingsClose.addEventListener('click', () => {
+  closeModdedSettings();
+});
+
+moddedOpenFolder.addEventListener('click', async () => {
+  const versionId = moddedSettingsModal.dataset.versionId;
+  if (!versionId) return;
+  try {
+    await window.minecraftLauncher.openVersionFolder({ versionId });
+  } catch (error) {
+    log(`Failed to open folder: ${error.message}`);
+  }
+});
+
+moddedRenameConfirm.addEventListener('click', async () => {
+  const oldId = moddedSettingsModal.dataset.versionId;
+  const newId = moddedRenameInput.value.trim();
+  if (!oldId || !newId) return;
+  if (oldId === newId) {
+    closeModdedSettings();
+    return;
+  }
+  try {
+    await window.minecraftLauncher.renameModdedVersion({ oldId, newId });
+    await loadVersions();
+    await loadModdedVersions();
+    versionSelect.value = newId;
+    moddedVersionSelect.value = newId;
+    await refreshVersionInfo();
+    closeModdedSettings();
+  } catch (error) {
+    log(`Failed to rename modded version: ${error.message}`);
+  }
+});
+
+moddedDelete.addEventListener('click', async () => {
+  const versionId = moddedSettingsModal.dataset.versionId;
+  if (!versionId) return;
+  const confirmed = window.confirm(`Delete modded version "${versionId}"?`);
+  if (!confirmed) return;
+  try {
+    await window.minecraftLauncher.deleteModdedVersion({ versionId });
+    await loadVersions();
+    await loadModdedVersions();
+    setActiveTab('play');
+    await refreshVersionInfo();
+    closeModdedSettings();
+  } catch (error) {
+    log(`Failed to delete modded version: ${error.message}`);
+  }
 });
 
 createModdedConfirm.addEventListener('click', async () => {

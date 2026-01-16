@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -837,7 +837,7 @@ async function buildForgeClientJarFromInstaller({ baseVersion, installerPath, ta
     runProcessor(processor, 'client');
   }
 
-  const candidatePaths = [mcOffPath, patchedPath];
+  const candidatePaths = [patchedPath, mcOffPath];
   const selected = candidatePaths.find((candidate) => fs.existsSync(candidate));
   if (!selected) {
     throw new Error('Forge client processing failed: no client jar output found.');
@@ -850,34 +850,30 @@ async function buildForgeClientJarFromInstaller({ baseVersion, installerPath, ta
 
 async function ensureClientJarFromBase({ baseVersion, targetPath, installerPath }) {
   const baseJarPath = path.join(versionsDir, baseVersion, `${baseVersion}.jar`);
-  if (fs.existsSync(targetPath)) {
-    try {
-      assertValidClientJar(targetPath);
-      return;
-    } catch (error) {
-      // Fall through to recreate client.jar
-    }
+
+  if (installerPath && fs.existsSync(installerPath)) {
+    const workDir = path.join(path.dirname(targetPath), 'forge-cache');
+    await buildForgeClientJarFromInstaller({
+      baseVersion,
+      installerPath,
+      targetPath,
+      workDir
+    });
+    return;
   }
 
   if (fs.existsSync(baseJarPath)) {
-    try {
-      assertValidClientJar(baseJarPath);
-      log(`Copying vanilla client JAR to modded instance...`);
-      fs.copyFileSync(baseJarPath, targetPath);
-      assertValidClientJar(targetPath);
-      return;
-    } catch (error) {
-      // Fall through to installer extraction
-    }
+    assertValidClientJar(baseJarPath);
+    log(`Copying vanilla client JAR to modded instance...`);
+    fs.copyFileSync(baseJarPath, targetPath);
+    assertValidClientJar(targetPath);
+    return;
   }
 
-  const workDir = path.join(path.dirname(targetPath), 'forge-cache');
-  await buildForgeClientJarFromInstaller({
-    baseVersion,
-    installerPath,
-    targetPath,
-    workDir
-  });
+  throw new Error(
+    `Unable to build a valid Minecraft client JAR for ${baseVersion}. ` +
+      'The vanilla jar is missing or invalid and the Forge installer is not available.'
+  );
 }
 
 function resolveArguments(argumentsList, variables) {
@@ -949,6 +945,100 @@ function extractForgeVersionFromLibraries(libraries = []) {
     return parts[2] || null;
   }
   return null;
+}
+
+function extractMcVersionFromForgeVersion(forgeVersion) {
+  if (!forgeVersion) return null;
+  const dashIndex = forgeVersion.indexOf('-');
+  return dashIndex === -1 ? null : forgeVersion.slice(0, dashIndex);
+}
+
+function extractForgeBuildFromForgeVersion(forgeVersion) {
+  if (!forgeVersion) return null;
+  const dashIndex = forgeVersion.indexOf('-');
+  return dashIndex === -1 ? null : forgeVersion.slice(dashIndex + 1);
+}
+
+function extractMcpVersionFromLibraries(libraries = [], mcVersion) {
+  if (!Array.isArray(libraries)) return null;
+  const mcpLib = libraries.find((lib) => typeof lib?.name === 'string' && lib.name.startsWith('de.oceanlabs.mcp:mcp_config:'));
+  if (!mcpLib) return null;
+  const parts = mcpLib.name.split(':');
+  const version = parts[2] || null;
+  if (!version) return null;
+  if (mcVersion && version.startsWith(`${mcVersion}-`)) {
+    return version.slice(mcVersion.length + 1);
+  }
+  const dashIndex = version.indexOf('-');
+  return dashIndex === -1 ? version : version.slice(dashIndex + 1);
+}
+
+function renameModdedVersion(oldId, newId) {
+  if (!oldId || !newId) {
+    throw new Error('Missing version id(s) for rename.');
+  }
+  if (oldId === newId) {
+    return { id: newId };
+  }
+
+  const oldDir = path.join(versionsDir, oldId);
+  const newDir = path.join(versionsDir, newId);
+  if (!fs.existsSync(oldDir)) {
+    throw new Error(`Version ${oldId} not found.`);
+  }
+  if (fs.existsSync(newDir)) {
+    throw new Error(`Version ${newId} already exists.`);
+  }
+
+  const versionJson = loadVersionJson(oldId);
+  if (!versionJson || !getLauncherMetadata(versionJson)?.modded) {
+    throw new Error('Only modded versions can be renamed.');
+  }
+
+  fs.renameSync(oldDir, newDir);
+
+  const oldJsonPath = path.join(newDir, `${oldId}.json`);
+  const newJsonPath = path.join(newDir, `${newId}.json`);
+  versionJson.id = newId;
+  versionJson.jar = newId;
+  fs.writeFileSync(newJsonPath, JSON.stringify(versionJson, null, 2));
+  if (fs.existsSync(oldJsonPath)) {
+    fs.unlinkSync(oldJsonPath);
+  }
+
+  const oldJarPath = path.join(newDir, `${oldId}.jar`);
+  const newJarPath = path.join(newDir, `${newId}.jar`);
+  if (fs.existsSync(oldJarPath)) {
+    fs.renameSync(oldJarPath, newJarPath);
+  }
+
+  return { id: newId };
+}
+
+function deleteModdedVersion(versionId) {
+  if (!versionId) {
+    throw new Error('Missing version id for delete.');
+  }
+  const versionJson = loadVersionJson(versionId);
+  if (!versionJson || !getLauncherMetadata(versionJson)?.modded) {
+    throw new Error('Only modded versions can be deleted.');
+  }
+  const versionDir = path.join(versionsDir, versionId);
+  if (fs.existsSync(versionDir)) {
+    fs.rmSync(versionDir, { recursive: true, force: true });
+  }
+  return true;
+}
+
+function openVersionFolder(versionId) {
+  if (!versionId) {
+    throw new Error('Missing version id for open.');
+  }
+  const versionDir = path.join(versionsDir, versionId);
+  if (!fs.existsSync(versionDir)) {
+    throw new Error(`Version ${versionId} not found.`);
+  }
+  return shell.openPath(versionDir);
 }
 
 async function ensureBaseVersionDownloaded(versionId) {
@@ -1330,6 +1420,21 @@ ipcMain.handle('get-version-info', async (_event, versionId) => {
   };
 });
 
+ipcMain.handle('rename-modded-version', async (_event, payload) => {
+  const { oldId, newId } = payload || {};
+  return renameModdedVersion(oldId, newId);
+});
+
+ipcMain.handle('delete-modded-version', async (_event, payload) => {
+  const { versionId } = payload || {};
+  return deleteModdedVersion(versionId);
+});
+
+ipcMain.handle('open-version-folder', async (_event, payload) => {
+  const { versionId } = payload || {};
+  return openVersionFolder(versionId);
+});
+
 ipcMain.handle('create-modded-version', async (_event, payload) => {
   const { customName, baseVersion, loader } = payload;
   if (!customName || !baseVersion || !loader) {
@@ -1445,6 +1550,14 @@ ipcMain.handle('launch-game', async (_event, payload) => {
     classpathEntries.push(jarPath);
   }
 
+  if (getLauncherMetadata(versionJson)?.loader === 'forge' || getLauncherMetadata(versionJson)?.loader === 'neoforge') {
+    const clientJarPath = path.join(paths.versionDir, 'client.jar');
+    if (fs.existsSync(clientJarPath)) {
+      log(`Adding to classpath: ${clientJarPath}`);
+      classpathEntries.push(clientJarPath);
+    }
+  }
+
   const classpathSeparator = process.platform === 'win32' ? ';' : ':';
   const classpath = classpathEntries.join(classpathSeparator);
 
@@ -1522,6 +1635,25 @@ ipcMain.handle('launch-game', async (_event, payload) => {
       ? await ensureForgeInstaller({ loaderType: meta.loader, forgeVersion })
       : null;
     await ensureClientJarFromBase({ baseVersion, targetPath: clientJarPath, installerPath });
+
+    const mcVersion = extractMcVersionFromForgeVersion(forgeVersion) || baseVersion;
+    const forgeBuild = extractForgeBuildFromForgeVersion(forgeVersion);
+    const mcpVersion = extractMcpVersionFromLibraries(versionJson.libraries, mcVersion);
+    const forgeGroup = meta?.loader === 'neoforge' ? 'net.neoforged' : 'net.minecraftforge';
+
+    const ensureArgPair = (key, value) => {
+      if (!value) return;
+      const index = gameArgs.indexOf(key);
+      if (index === -1) {
+        gameArgs.push(key, value);
+      }
+    };
+
+    ensureArgPair('--fml.mcVersion', mcVersion);
+    ensureArgPair('--fml.forgeVersion', forgeBuild);
+    ensureArgPair('--fml.forgeGroup', forgeGroup);
+    ensureArgPair('--fml.mcpVersion', mcpVersion);
+
     gameArgs.push('--minecraftJar', clientJarPath);
   }
 

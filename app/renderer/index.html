@@ -27,8 +27,12 @@
 
         <div class="mods-filter">
           <label for="modded-version">Modded version</label>
-          <select id="modded-version"></select>
+          <div class="version-select-row">
+            <select id="modded-version"></select>
+            <button id="modded-version-settings" class="secondary" title="Modded settings">⚙</button>
+          </div>
         </div>
+
 
         <div class="mods-layout">
           <div class="mods-main">
@@ -72,7 +76,9 @@
 
         <div class="footer-field">
           <label for="version">Version</label>
-          <select id="version"></select>
+          <div class="version-select-row">
+            <select id="version"></select>
+          </div>
         </div>
       </div>
       <button id="play">Play</button>
@@ -98,6 +104,27 @@
         <div class="modal-actions">
           <button id="create-modded-confirm">Create</button>
           <button id="create-modded-cancel" class="secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="modded-settings-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Modded Profile Settings</h2>
+        <div class="modal-subtitle" id="modded-settings-title"></div>
+        <div class="modal-info">
+          <div><strong>Version:</strong> <span id="modded-settings-version"></span></div>
+          <div><strong>Loader:</strong> <span id="modded-settings-loader"></span></div>
+        </div>
+
+        <label for="modded-rename">Rename version</label>
+        <input id="modded-rename" type="text" placeholder="New version name" />
+
+        <div class="modal-actions">
+          <button id="modded-rename-confirm">Rename</button>
+          <button id="modded-open-folder" class="secondary">Open Folder</button>
+          <button id="modded-delete" class="secondary">Delete</button>
+          <button id="modded-settings-close" class="secondary">Close</button>
         </div>
       </div>
     </div>

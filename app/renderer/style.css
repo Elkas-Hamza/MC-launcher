@@ -86,6 +86,19 @@ h1 {
   max-width: 280px;
 }
 
+
+.modal-subtitle {
+  font-size: 13px;
+  color: #bdbdbd;
+}
+
+.modal-info {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: #d6d6d6;
+}
+
 .mods-search input {
   flex: 1;
 }
@@ -248,6 +261,7 @@ button.secondary {
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
+  z-index: 10;
 }
 
 .footer-progress {
@@ -266,6 +280,18 @@ button.secondary {
 .footer-field {
   display: grid;
   gap: 6px;
+}
+
+.version-select-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+#modded-version-settings {
+  padding: 8px 10px;
+  min-width: 40px;
 }
 
 .modal {
