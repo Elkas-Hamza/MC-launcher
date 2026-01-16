@@ -5,6 +5,7 @@ const https = require('https');
 const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
+const lzma = require('lzma');
 
 const MANUAL_JAVA_PATH = '';
 const MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest.json';
@@ -223,7 +224,9 @@ function resolveVersionChain(versionId) {
 
     const candidateJarId = json.jar || id;
     const candidateJarPath = path.join(versionsDir, candidateJarId, `${candidateJarId}.jar`);
-    if (fs.existsSync(candidateJarPath)) {
+    const jarExists = fs.existsSync(candidateJarPath);
+    
+    if (jarExists) {
       jarIds.push(candidateJarId);
     }
   }
@@ -716,6 +719,167 @@ function getLauncherMetadata(versionJson) {
   return null;
 }
 
+function assertValidClientJar(clientJarPath) {
+  if (!fs.existsSync(clientJarPath)) {
+    throw new Error(`Minecraft client JAR not found at ${clientJarPath}. Please ensure the vanilla version is properly installed.`);
+  }
+  try {
+    const zip = new AdmZip(clientJarPath);
+    const entry = zip.getEntry('net/minecraft/client/Minecraft.class');
+    if (!entry) {
+      throw new Error('Minecraft.class is missing');
+    }
+  } catch (error) {
+    const message = error?.message || 'Unknown error';
+    throw new Error(`Invalid Minecraft client JAR at ${clientJarPath}: ${message}`);
+  }
+}
+
+function decompressLzma(buffer) {
+  return new Promise((resolve, reject) => {
+    lzma.decompress(buffer, (result, error) => {
+      if (error) return reject(error);
+      if (Buffer.isBuffer(result)) return resolve(result);
+      if (result instanceof Uint8Array) return resolve(Buffer.from(result));
+      if (typeof result === 'string') return resolve(Buffer.from(result, 'binary'));
+      return resolve(Buffer.from(result));
+    });
+  });
+}
+
+function extractInstallerFile(installerPath, entryName, targetPath) {
+  if (!installerPath || !fs.existsSync(installerPath)) return false;
+  const zip = new AdmZip(installerPath);
+  const entry = zip.getEntry(entryName);
+  if (!entry) return false;
+  const buffer = zip.readFile(entry);
+  if (!buffer) return false;
+  ensureDir(path.dirname(targetPath));
+  fs.writeFileSync(targetPath, buffer);
+  return true;
+}
+
+async function buildForgeClientJarFromInstaller({ baseVersion, installerPath, targetPath, workDir }) {
+  if (!installerPath || !fs.existsSync(installerPath)) {
+    throw new Error('Forge installer not found. Cannot build client.jar.');
+  }
+
+  const javaExecutable = getPreferredJava();
+  if (!javaExecutable) {
+    throw new Error('Java not found. Cannot build Forge client.jar.');
+  }
+
+  ensureDir(workDir);
+
+  const installProfile = extractInstallProfileFromInstaller(installerPath);
+  const libsForTools = installProfile.libraries || [];
+  const toolNativesDir = path.join(workDir, 'natives');
+
+  await downloadLibraries(libsForTools, baseVersion, librariesDir, toolNativesDir);
+
+  const libraryMap = new Map();
+  for (const lib of libsForTools) {
+    if (lib?.name) {
+      const libPath = buildLibraryPath(lib, librariesDir);
+      if (libPath) libraryMap.set(lib.name, libPath);
+    }
+  }
+
+  const resolveLibraryPath = (name) => {
+    if (libraryMap.has(name)) return libraryMap.get(name);
+    const artifactPath = buildMavenArtifactPath(name);
+    return artifactPath ? path.join(librariesDir, artifactPath) : null;
+  };
+
+  const clientLzmaPath = path.join(workDir, 'client.lzma');
+  extractInstallerFile(installerPath, 'data/client.lzma', clientLzmaPath);
+
+  const baseJarPath = path.join(versionsDir, baseVersion, `${baseVersion}.jar`);
+  if (!fs.existsSync(baseJarPath)) {
+    throw new Error(`Base version JAR not found at ${baseJarPath}.`);
+  }
+
+  const mojmapsPath = path.join(workDir, 'mojmaps.tsrg');
+  const mcOffPath = path.join(workDir, 'minecraft_official.jar');
+  const patchedPath = path.join(workDir, 'minecraft_patched.jar');
+
+  const processors = Array.isArray(installProfile.processors) ? installProfile.processors : [];
+
+  const replaceVars = (value, side) => {
+    if (typeof value !== 'string') return value;
+    return value
+      .replaceAll('{SIDE}', side)
+      .replaceAll('{MINECRAFT_JAR}', baseJarPath)
+      .replaceAll('{MOJMAPS}', mojmapsPath)
+      .replaceAll('{MC_OFF}', mcOffPath)
+      .replaceAll('{BINPATCH}', clientLzmaPath)
+      .replaceAll('{PATCHED}', patchedPath)
+      .replaceAll('{INSTALLER}', installerPath)
+      .replaceAll('{ROOT}', minecraftDir)
+      .replaceAll('{MINECRAFT_VERSION}', baseVersion);
+  };
+
+  const runProcessor = (processor, side) => {
+    const jarPath = resolveLibraryPath(processor.jar);
+    if (!jarPath) {
+      throw new Error(`Processor jar not found: ${processor.jar}`);
+    }
+    const classpath = (processor.classpath || [])
+      .map((name) => resolveLibraryPath(name))
+      .filter(Boolean);
+    const args = (processor.args || []).map((arg) => replaceVars(arg, side));
+    runJavaTool({ javaExecutable, jarPath, classpathEntries: classpath, args });
+  };
+
+  for (const processor of processors) {
+    const sides = processor.sides || ['client', 'server'];
+    if (!sides.includes('client')) continue;
+    runProcessor(processor, 'client');
+  }
+
+  const candidatePaths = [mcOffPath, patchedPath];
+  const selected = candidatePaths.find((candidate) => fs.existsSync(candidate));
+  if (!selected) {
+    throw new Error('Forge client processing failed: no client jar output found.');
+  }
+
+  log(`Using client jar output: ${selected}`);
+  fs.copyFileSync(selected, targetPath);
+  assertValidClientJar(targetPath);
+}
+
+async function ensureClientJarFromBase({ baseVersion, targetPath, installerPath }) {
+  const baseJarPath = path.join(versionsDir, baseVersion, `${baseVersion}.jar`);
+  if (fs.existsSync(targetPath)) {
+    try {
+      assertValidClientJar(targetPath);
+      return;
+    } catch (error) {
+      // Fall through to recreate client.jar
+    }
+  }
+
+  if (fs.existsSync(baseJarPath)) {
+    try {
+      assertValidClientJar(baseJarPath);
+      log(`Copying vanilla client JAR to modded instance...`);
+      fs.copyFileSync(baseJarPath, targetPath);
+      assertValidClientJar(targetPath);
+      return;
+    } catch (error) {
+      // Fall through to installer extraction
+    }
+  }
+
+  const workDir = path.join(path.dirname(targetPath), 'forge-cache');
+  await buildForgeClientJarFromInstaller({
+    baseVersion,
+    installerPath,
+    targetPath,
+    workDir
+  });
+}
+
 function resolveArguments(argumentsList, variables) {
   const resolved = [];
 
@@ -770,6 +934,21 @@ function formatLoaderName(loader) {
   if (!loader) return '';
   if (loader === 'neoforge') return 'NeoForge';
   return `${loader.charAt(0).toUpperCase()}${loader.slice(1)}`;
+}
+
+function extractForgeVersionFromLibraries(libraries = []) {
+  if (!Array.isArray(libraries)) return null;
+  const forgeLib = libraries.find((lib) => typeof lib?.name === 'string' && lib.name.startsWith('net.minecraftforge:forge:'));
+  if (forgeLib) {
+    const parts = forgeLib.name.split(':');
+    return parts[2] || null;
+  }
+  const neoforgeLib = libraries.find((lib) => typeof lib?.name === 'string' && lib.name.startsWith('net.neoforged:neoforge:'));
+  if (neoforgeLib) {
+    const parts = neoforgeLib.name.split(':');
+    return parts[2] || null;
+  }
+  return null;
 }
 
 async function ensureBaseVersionDownloaded(versionId) {
@@ -925,6 +1104,45 @@ function extractForgeJarFromInstaller(installerPath, loaderType, version, target
   return true;
 }
 
+function extractInstallProfileFromInstaller(installerPath) {
+  const zip = new AdmZip(installerPath);
+  const entry = zip.getEntry('install_profile.json');
+  if (!entry) {
+    throw new Error('install_profile.json not found in installer');
+  }
+  const content = zip.readAsText(entry);
+  return JSON.parse(content);
+}
+
+function getJarMainClass(jarPath) {
+  const zip = new AdmZip(jarPath);
+  const entry = zip.getEntry('META-INF/MANIFEST.MF');
+  if (!entry) return null;
+  const content = zip.readAsText(entry);
+  const lines = content.split(/\r?\n/);
+  const mainLine = lines.find((line) => line.toLowerCase().startsWith('main-class:'));
+  if (!mainLine) return null;
+  return mainLine.split(':').slice(1).join(':').trim();
+}
+
+function runJavaTool({ javaExecutable, jarPath, classpathEntries = [], args = [] }) {
+  const mainClass = getJarMainClass(jarPath);
+  if (!mainClass) {
+    throw new Error(`Main-Class not found in ${jarPath}`);
+  }
+  const classpathSeparator = process.platform === 'win32' ? ';' : ':';
+  const classpath = [jarPath, ...classpathEntries].join(classpathSeparator);
+  const result = spawnSync(javaExecutable, ['-cp', classpath, mainClass, ...args], {
+    stdio: 'inherit'
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`Java tool failed (${jarPath}) with exit code ${result.status}.`);
+  }
+}
+
 async function createForgeProfile(baseVersion, loaderType) {
   const version = loaderType === 'neoforge'
     ? await getNeoForgeVersionForMc(baseVersion)
@@ -943,6 +1161,20 @@ async function createForgeProfile(baseVersion, loaderType) {
   await downloadFile(installerUrl, installerPath);
   const profileJson = await extractVersionJsonFromInstaller(installerPath);
   return { profileJson, installerPath, version };
+}
+
+async function ensureForgeInstaller({ loaderType, forgeVersion }) {
+  if (!loaderType || !forgeVersion) return null;
+  const installerPath = path.join(minecraftDir, `${loaderType}-${forgeVersion}-installer.jar`);
+  if (fs.existsSync(installerPath)) return installerPath;
+
+  const installerUrl = loaderType === 'neoforge'
+    ? `https://maven.neoforged.net/releases/net/neoforged/neoforge/${forgeVersion}/neoforge-${forgeVersion}-installer.jar`
+    : `https://maven.minecraftforge.net/net/minecraftforge/forge/${forgeVersion}/forge-${forgeVersion}-installer.jar`;
+
+  log(`Downloading ${loaderType} installer...`);
+  await downloadFile(installerUrl, installerPath);
+  return installerPath;
 }
 
 async function createModdedProfile({ customName, baseVersion, loader }) {
@@ -982,7 +1214,8 @@ async function createModdedProfile({ customName, baseVersion, loader }) {
   profileJson.launcher = {
     modded: true,
     loader,
-    baseVersion
+    baseVersion,
+    ...(forgeInstaller ? { forgeVersion: forgeInstaller.version } : {})
   };
 
   const paths = ensureVersionRuntimeLayout(customName, true);
@@ -1008,6 +1241,16 @@ async function createModdedProfile({ customName, baseVersion, loader }) {
   log('Downloading libraries...');
   const resolved = resolveVersionChain(customName);
   await downloadLibraries(resolved.libraries, customName, librariesDir, paths.nativesDir);
+
+  // For Forge/NeoForge, copy the vanilla client JAR into the modded instance
+  if (loader === 'forge' || loader === 'neoforge') {
+    const clientJarPath = path.join(versionDir, 'client.jar');
+    await ensureClientJarFromBase({
+      baseVersion,
+      targetPath: clientJarPath,
+      installerPath: forgeInstaller?.installerPath
+    });
+  }
 
   log('Modded profile created.');
   return { id: customName, loader, baseVersion };
@@ -1157,6 +1400,22 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   const isModded = Boolean(getLauncherMetadata(versionJson)?.modded);
   const paths = ensureVersionRuntimeLayout(versionId, isModded);
   const resolved = resolveVersionChain(versionId);
+  
+  log(`Version: ${versionId}`);
+  log(`Resolved jarIds: ${resolved.jarIds.join(', ')}`);
+  log(`Has inheritsFrom: ${versionJson.inheritsFrom ? 'yes (' + versionJson.inheritsFrom + ')' : 'no'}`);
+
+  // For Forge versions, copy parent JAR into the modded version directory
+  if (versionJson.inheritsFrom && isModded) {
+    const parentJarId = versionJson.inheritsFrom;
+    const parentJarPath = path.join(versionsDir, parentJarId, `${parentJarId}.jar`);
+    const moddedClientJarPath = path.join(paths.versionDir, 'client.jar');
+    
+    if (fs.existsSync(parentJarPath) && !fs.existsSync(moddedClientJarPath)) {
+      log(`Copying parent JAR (${parentJarId}.jar) to modded instance...`);
+      fs.copyFileSync(parentJarPath, moddedClientJarPath);
+    }
+  }
 
   if (Array.isArray(resolved.libraries) && resolved.libraries.length > 0) {
     log('Ensuring libraries...');
@@ -1182,6 +1441,7 @@ ipcMain.handle('launch-game', async (_event, payload) => {
     if (!fs.existsSync(jarPath)) {
       throw new Error(`Jar not found: ${jarPath}. Please download the version first.`);
     }
+    log(`Adding to classpath: ${jarPath}`);
     classpathEntries.push(jarPath);
   }
 
@@ -1250,6 +1510,21 @@ ipcMain.handle('launch-game', async (_event, payload) => {
     );
   }
 
+  // For Forge/NeoForge, add --minecraftJar argument pointing to client.jar
+  if (meta?.loader === 'forge' || meta?.loader === 'neoforge') {
+    const clientJarPath = path.join(paths.versionDir, 'client.jar');
+    const baseVersion = meta?.baseVersion || versionJson.inheritsFrom;
+    if (!baseVersion) {
+      throw new Error('Forge base version is missing. Cannot resolve Minecraft client JAR.');
+    }
+    const forgeVersion = meta?.forgeVersion || extractForgeVersionFromLibraries(versionJson.libraries);
+    const installerPath = forgeVersion
+      ? await ensureForgeInstaller({ loaderType: meta.loader, forgeVersion })
+      : null;
+    await ensureClientJarFromBase({ baseVersion, targetPath: clientJarPath, installerPath });
+    gameArgs.push('--minecraftJar', clientJarPath);
+  }
+
   const args = [
     ...jvmArgs,
     '-cp',
@@ -1259,6 +1534,7 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   ];
 
   log('Launching game...');
+  log(`Full command: java ${args.join(' ')}`);
 
   const child = spawn(javaExecutable, args, {
     cwd: minecraftDir,

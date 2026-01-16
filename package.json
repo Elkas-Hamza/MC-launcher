@@ -10,7 +10,8 @@
     "start": "electron ."
   },
   "dependencies": {
-    "adm-zip": "^0.5.10"
+    "adm-zip": "^0.5.10",
+    "lzma": "^2.3.2"
   },
   "devDependencies": {
     "electron": "^30.0.0"
