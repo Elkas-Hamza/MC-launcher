@@ -185,8 +185,13 @@ function renderModsList(mods = [], append = false) {
         <div class="mod-author">${mod.author || 'Unknown author'}</div>
       </div>
       <div class="mod-actions">
-        <button data-project-id="${mod.project_id}" data-action="${isInstalled ? 'delete' : 'install'}">
-          ${isInstalled ? 'Delete' : 'Install'}
+        <button 
+          data-project-id="${mod.project_id}"
+          data-title="${mod.title}"
+          data-icon-url="${mod.icon_url || ''}"
+          data-author="${mod.author || 'Unknown author'}"
+          ${isInstalled ? 'class="secondary" disabled' : ''}>
+          ${isInstalled ? 'Installed' : 'Install'}
         </button>
       </div>
     `;
@@ -216,6 +221,25 @@ function renderInstalledMods(mods = []) {
   });
 }
 
+function renderInstalledResourcepacks(resourcepacks = []) {
+  installedResourcepacksList.innerHTML = '';
+  if (!resourcepacks.length) {
+    installedResourcepacksList.innerHTML = '<div class="resourcepacks-info">No installed resource packs.</div>';
+    return;
+  }
+
+  resourcepacks.forEach((pack) => {
+    const item = document.createElement('div');
+    item.className = 'installed-resourcepack-item';
+    item.innerHTML = `
+      <img src="${pack.iconUrl || ''}" alt="${pack.title}" />
+      <div>${pack.title}</div>
+      <button data-installed-id="${pack.projectId}">Delete</button>
+    `;
+    installedResourcepacksList.appendChild(item);
+  });
+}
+
 async function loadInstalledMods() {
   if (!currentVersionInfo?.isModded) {
     installedMods = [];
@@ -227,6 +251,19 @@ async function loadInstalledMods() {
     renderInstalledMods(installedMods);
   } catch (error) {
     log(`Failed to load installed mods: ${error.message}`);
+  }
+}
+
+async function loadInstalledResourcepacks() {
+  if (!currentVersionInfo?.id) {
+    renderInstalledResourcepacks([]);
+    return;
+  }
+  try {
+    const resourcepacks = await window.minecraftLauncher.listInstalledResourcepacks(currentVersionInfo.id);
+    renderInstalledResourcepacks(resourcepacks);
+  } catch (error) {
+    log(`Failed to load installed resource packs: ${error.message}`);
   }
 }
 
@@ -275,6 +312,11 @@ function renderResourcepacksList(resourcepacks = [], append = false) {
   resourcepacks.forEach((pack) => {
     const item = document.createElement('div');
     item.className = 'resourcepack-item';
+    
+    // Check if already installed - get installed resource packs from the sidebar
+    const installedResourcepacks = Array.from(installedResourcepacksList.querySelectorAll('[data-installed-id]')).map(el => el.dataset.installedId);
+    const isInstalled = installedResourcepacks.includes(pack.project_id);
+    
     item.innerHTML = `
       <img class="resourcepack-icon" src="${pack.icon_url || ''}" alt="${pack.title}" />
       <div class="resourcepack-meta">
@@ -282,7 +324,14 @@ function renderResourcepacksList(resourcepacks = [], append = false) {
         <p>${pack.description || ''}</p>
       </div>
       <div class="mod-actions">
-        <button data-project-id="${pack.project_id}">Download</button>
+        <button 
+          data-project-id="${pack.project_id}" 
+          data-title="${pack.title}" 
+          data-icon-url="${pack.icon_url || ''}"
+          data-author="${pack.author || ''}"
+          ${isInstalled ? 'class="secondary" disabled' : ''}>
+          ${isInstalled ? 'Installed' : 'Install'}
+        </button>
       </div>
     `;
     resourcepacksList.appendChild(item);
@@ -291,7 +340,15 @@ function renderResourcepacksList(resourcepacks = [], append = false) {
 
 async function fetchResourcepacks(query = '', offset = 0) {
   try {
-    const mcVersion = versionSelect.value || '1.20';
+    // Get the selected version and extract base version if it's modded
+    const selectedVersionId = versionSelect.value || '1.20';
+    let mcVersion = selectedVersionId;
+    
+    // If it's a modded version, use the base version instead
+    if (currentVersionInfo?.isModded && currentVersionInfo?.baseVersion) {
+      mcVersion = currentVersionInfo.baseVersion;
+    }
+    
     const facets = [
       ['project_type:resourcepack'],
       [`versions:${mcVersion}`]
@@ -514,6 +571,7 @@ tabButtons.forEach((button) => {
     setActiveTab(button.dataset.tab);
     if (button.dataset.tab === 'resourcepacks') {
       loadInitialResourcepacks();
+      loadInstalledResourcepacks();
     }
   });
 });
@@ -690,46 +748,37 @@ loadMoreResourcepacksButton.addEventListener('click', async () => {
 
 modsList.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-project-id]');
-  if (!button) return;
+  if (!button || button.disabled) return;
   if (!currentVersionInfo?.isModded) {
     log('Select a modded version first.');
     return;
   }
   const projectId = button.dataset.projectId;
-  const action = button.dataset.action;
+  const title = button.dataset.title || button.closest('.mod-item')?.querySelector('h3')?.textContent || projectId;
+  const author = button.dataset.author || button.closest('.mod-item')?.querySelector('.mod-author')?.textContent || 'Unknown author';
+  const iconUrl = button.dataset.iconUrl || button.closest('.mod-item')?.querySelector('img')?.getAttribute('src') || '';
+  
   try {
-    if (action === 'delete') {
-      await window.minecraftLauncher.removeMod({
-        projectId,
-        profileName: currentVersionInfo.id
-      });
-    } else {
-      const title = button.closest('.mod-item')?.querySelector('h3')?.textContent || projectId;
-      const author = button.closest('.mod-item')?.querySelector('.mod-author')?.textContent || 'Unknown author';
-      const iconUrl = button.closest('.mod-item')?.querySelector('img')?.getAttribute('src') || '';
-      await window.minecraftLauncher.installMod({
-        projectId,
-        mcVersion: currentVersionInfo.baseVersion,
-        loader: currentVersionInfo.loader,
-        profileName: currentVersionInfo.id,
-        title,
-        iconUrl,
-        author
-      });
-    }
+    button.disabled = true;
+    button.textContent = 'Installing...';
+    
+    await window.minecraftLauncher.installMod({
+      projectId,
+      mcVersion: currentVersionInfo.baseVersion,
+      loader: currentVersionInfo.loader,
+      profileName: currentVersionInfo.id,
+      title,
+      iconUrl,
+      author
+    });
+    
+    button.textContent = 'Installed';
+    button.classList.add('secondary');
     await loadInstalledMods();
-    const query = modSearchInput.value.trim();
-    if (query || currentModsOffset > 0) {
-      currentModsOffset = 0;
-      const response = await fetchMods(currentModsQuery, 0);
-      if (response) {
-        renderModsList(response.hits || [], false);
-        hasMoreMods = (response.hits || []).length >= 25;
-        loadMoreButton.classList.toggle('hidden', !hasMoreMods);
-      }
-    }
   } catch (error) {
-    log(`Failed to update mod: ${error.message}`);
+    log(`Failed to install mod: ${error.message}`);
+    button.disabled = false;
+    button.textContent = 'Install';
   }
 });
 
@@ -738,23 +787,44 @@ installedModsList.addEventListener('click', async (event) => {
   if (!button || !currentVersionInfo?.isModded) return;
   const projectId = button.dataset.installedId;
   try {
+    button.disabled = true;
+    button.textContent = 'Deleting...';
+    
     await window.minecraftLauncher.removeMod({
       projectId,
       profileName: currentVersionInfo.id
     });
     await loadInstalledMods();
-    const query = modSearchInput.value.trim();
-    if (query || currentModsOffset > 0) {
-      currentModsOffset = 0;
-      const response = await fetchMods(currentModsQuery, 0);
-      if (response) {
-        renderModsList(response.hits || [], false);
-        hasMoreMods = (response.hits || []).length >= 25;
-        loadMoreButton.classList.toggle('hidden', !hasMoreMods);
-      }
-    }
+    
+    // Re-render the mods list to update button states
+    await loadInitialMods();
   } catch (error) {
     log(`Failed to remove mod: ${error.message}`);
+    button.disabled = false;
+    button.textContent = 'Delete';
+  }
+});
+
+installedResourcepacksList.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-installed-id]');
+  if (!button || !currentVersionInfo?.id) return;
+  const projectId = button.dataset.installedId;
+  try {
+    button.disabled = true;
+    button.textContent = 'Deleting...';
+    
+    await window.minecraftLauncher.removeResourcepack({
+      projectId,
+      profileName: currentVersionInfo.id
+    });
+    await loadInstalledResourcepacks();
+    
+    // Re-render the resource packs list to update button states
+    await loadInitialResourcepacks();
+  } catch (error) {
+    log(`Failed to remove resource pack: ${error.message}`);
+    button.disabled = false;
+    button.textContent = 'Delete';
   }
 });
 
@@ -766,6 +836,42 @@ moddedVersionSelect.addEventListener('change', async () => {
   await refreshVersionInfo();
   if (currentVersionInfo?.isModded) {
     await loadInstalledMods();
+  }
+});
+
+resourcepacksList.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-project-id]');
+  if (!button || button.disabled) return;
+  if (!currentVersionInfo?.id) {
+    log('Select a version first.');
+    return;
+  }
+  const projectId = button.dataset.projectId;
+  const title = button.dataset.title || button.closest('.resourcepack-item')?.querySelector('h3')?.textContent || projectId;
+  const author = button.dataset.author || '';
+  const iconUrl = button.dataset.iconUrl || button.closest('.resourcepack-item')?.querySelector('img')?.getAttribute('src') || '';
+  const baseVersion = currentVersionInfo.baseVersion || currentVersionInfo.id;
+  
+  try {
+    button.disabled = true;
+    button.textContent = 'Installing...';
+    
+    await window.minecraftLauncher.installResourcepack({
+      projectId,
+      mcVersion: baseVersion,
+      profileName: currentVersionInfo.id,
+      title,
+      iconUrl,
+      author
+    });
+    
+    button.textContent = 'Installed';
+    button.classList.add('secondary');
+    await loadInstalledResourcepacks();
+  } catch (error) {
+    log(`Failed to install resource pack: ${error.message}`);
+    button.disabled = false;
+    button.textContent = 'Install';
   }
 });
 

@@ -22,6 +22,7 @@ const assetIndexesDir = path.join(assetsDir, 'indexes');
 const assetsObjectsDir = path.join(assetsDir, 'objects');
 const nativesBaseDir = path.join(minecraftDir, 'natives');
 const MODS_METADATA_FILE = '.launcher-mods.json';
+const RESOURCEPACKS_METADATA_FILE = '.launcher-resourcepacks.json';
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -366,6 +367,59 @@ function listInstalledMods(profileName) {
 
   if (changed) {
     saveModsMetadata(profileName, metadata);
+  }
+
+  return result;
+}
+
+function getResourcepacksDir(profileName) {
+  return getVersionPaths(profileName).resourcepacksDir;
+}
+
+function loadResourcepacksMetadata(profileName) {
+  const resourcepacksDir = getResourcepacksDir(profileName);
+  const metadataPath = path.join(resourcepacksDir, RESOURCEPACKS_METADATA_FILE);
+  if (!fs.existsSync(metadataPath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(metadataPath, 'utf-8')) || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveResourcepacksMetadata(profileName, metadata) {
+  const resourcepacksDir = getResourcepacksDir(profileName);
+  ensureDir(resourcepacksDir);
+  const metadataPath = path.join(resourcepacksDir, RESOURCEPACKS_METADATA_FILE);
+  fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+}
+
+function listInstalledResourcepacks(profileName) {
+  const resourcepacksDir = getResourcepacksDir(profileName);
+  ensureDir(resourcepacksDir);
+  const metadata = loadResourcepacksMetadata(profileName);
+  const result = [];
+  let changed = false;
+
+  Object.entries(metadata).forEach(([projectId, info]) => {
+    if (!info?.file) return;
+    const filePath = path.join(resourcepacksDir, info.file);
+    if (!fs.existsSync(filePath)) {
+      delete metadata[projectId];
+      changed = true;
+      return;
+    }
+    result.push({
+      projectId,
+      title: info.title,
+      iconUrl: info.iconUrl,
+      author: info.author,
+      file: info.file
+    });
+  });
+
+  if (changed) {
+    saveResourcepacksMetadata(profileName, metadata);
   }
 
   return result;
@@ -1461,6 +1515,40 @@ async function installModrinthMod({ projectId, mcVersion, loader, profileName, t
   return { file: destination };
 }
 
+async function installModrinthResourcepack({ projectId, mcVersion, profileName, title, iconUrl, author }) {
+  const versionsUrl = `https://api.modrinth.com/v2/project/${projectId}/version?game_versions=${encodeURIComponent(JSON.stringify([mcVersion]))}`;
+  const versions = await fetchJson(versionsUrl);
+  if (!versions || versions.length === 0) {
+    throw new Error('No compatible resource pack version found');
+  }
+
+  const version = versions[0];
+  const file = version.files?.[0];
+  if (!file?.url) {
+    throw new Error('No downloadable file found for resource pack');
+  }
+
+  const resourcepacksDir = getResourcepacksDir(profileName);
+  ensureDir(resourcepacksDir);
+
+  const destination = path.join(resourcepacksDir, file.filename);
+  log(`Installing resource pack: ${title || version.name || projectId}...`);
+  await downloadFile(file.url, destination, {
+    expectedSha1: file.hashes?.sha1 || null,
+    expectedSize: file.size || null
+  });
+  const metadata = loadResourcepacksMetadata(profileName);
+  metadata[projectId] = {
+    title: title || version.name || projectId,
+    iconUrl: iconUrl || null,
+    author: author || null,
+    file: file.filename
+  };
+  saveResourcepacksMetadata(profileName, metadata);
+  log(`Installed resource pack: ${title || version.name || projectId}`);
+  return { file: destination };
+}
+
 ipcMain.handle('fetch-versions', async () => {
   const manifest = await getManifest();
   return manifest.versions.filter((version) => version.type === 'release');
@@ -1505,6 +1593,11 @@ ipcMain.handle('open-version-folder', async (_event, payload) => {
   return openVersionFolder(versionId);
 });
 
+ipcMain.handle('open-external', async (_event, url) => {
+  shell.openExternal(url);
+  return true;
+});
+
 ipcMain.handle('create-modded-version', async (_event, payload) => {
   const { customName, baseVersion, loader } = payload;
   if (!customName || !baseVersion || !loader) {
@@ -1520,6 +1613,10 @@ ipcMain.handle('search-modrinth', async (_event, payload) => {
 
 ipcMain.handle('install-mod', async (_event, payload) => {
   return installModrinthMod(payload);
+});
+
+ipcMain.handle('install-resourcepack', async (_event, payload) => {
+  return installModrinthResourcepack(payload);
 });
 
 ipcMain.handle('fetch-json', async (_event, url) => {
@@ -1553,6 +1650,36 @@ ipcMain.handle('remove-mod', async (_event, payload) => {
   saveModsMetadata(profileName, metadata);
 
   log(`Removed mod: ${info.title || projectId}`);
+  return true;
+});
+
+ipcMain.handle('list-installed-resourcepacks', async (_event, profileName) => {
+  if (!profileName) return [];
+  return listInstalledResourcepacks(profileName);
+});
+
+ipcMain.handle('remove-resourcepack', async (_event, payload) => {
+  const { projectId, profileName } = payload || {};
+  if (!projectId || !profileName) {
+    throw new Error('Missing required fields for remove-resourcepack');
+  }
+
+  const resourcepacksDir = getResourcepacksDir(profileName);
+  const metadata = loadResourcepacksMetadata(profileName);
+  const info = metadata[projectId];
+  if (!info?.file) {
+    throw new Error('Resource pack not found for removal');
+  }
+
+  const filePath = path.join(resourcepacksDir, info.file);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+
+  delete metadata[projectId];
+  saveResourcepacksMetadata(profileName, metadata);
+
+  log(`Removed resource pack: ${info.title || projectId}`);
   return true;
 });
 
