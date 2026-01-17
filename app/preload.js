@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('minecraftLauncher', {
   removeMod: (payload) => ipcRenderer.invoke('remove-mod', payload),
   downloadVersion: (version) => ipcRenderer.invoke('download-version', version),
   launchGame: (payload) => ipcRenderer.invoke('launch-game', payload),
+  fetchJson: (url) => ipcRenderer.invoke('fetch-json', url),
   onLog: (callback) => ipcRenderer.on('log', (_event, message) => callback(message)),
   onProgress: (callback) => ipcRenderer.on('progress', (_event, data) => callback(data))
 });

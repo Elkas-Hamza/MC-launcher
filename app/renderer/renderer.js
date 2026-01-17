@@ -19,8 +19,14 @@ const modsInfo = document.getElementById('mods-info');
 const modSearchInput = document.getElementById('mod-search');
 const modSearchButton = document.getElementById('mod-search-btn');
 const modsList = document.getElementById('mods-list');
+const loadMoreButton = document.getElementById('load-more-mods');
 const installedModsList = document.getElementById('installed-mods');
 const moddedVersionSelect = document.getElementById('modded-version');
+const resourcepackSearchInput = document.getElementById('resourcepack-search');
+const resourcepackSearchButton = document.getElementById('resourcepack-search-btn');
+const resourcepacksList = document.getElementById('resourcepacks-list');
+const loadMoreResourcepacksButton = document.getElementById('load-more-resourcepacks');
+const installedResourcepacksList = document.getElementById('installed-resourcepacks');
 const modal = document.getElementById('modal');
 const moddedSettingsModal = document.getElementById('modded-settings-modal');
 const moddedNameInput = document.getElementById('modded-name');
@@ -37,17 +43,35 @@ const moddedOpenFolder = document.getElementById('modded-open-folder');
 const moddedDelete = document.getElementById('modded-delete');
 const moddedSettingsClose = document.getElementById('modded-settings-close');
 const logs = document.getElementById('logs');
+const prereleasesToggle = document.getElementById('show-prereleases');
+const showLogsToggle = document.getElementById('show-logs');
+const memoryLimitInput = document.getElementById('memory-limit');
+const memoryLimitValue = document.getElementById('memory-limit-value');
 const progressBar = document.getElementById('progress-bar');
 const progressText = document.getElementById('progress-text');
 
 const USERNAME_STORAGE_KEY = 'minecraftLauncher.username';
+const VERSION_STORAGE_KEY = 'minecraftLauncher.selectedVersion';
+const PRERELEASES_STORAGE_KEY = 'minecraftLauncher.showPrereleases';
+const SHOW_LOGS_STORAGE_KEY = 'minecraftLauncher.showLogs';
+const MEMORY_LIMIT_STORAGE_KEY = 'minecraftLauncher.memoryLimitGb';
 let cachedReleaseVersions = [];
 let currentVersionInfo = null;
 let installedMods = [];
 let availableModdedVersions = [];
+let logsEnabled = true;
+let activeTab = 'play';
+let currentModsOffset = 0;
+let currentModsQuery = '';
+let hasMoreMods = false;
+let currentResourcepacksOffset = 0;
+let currentResourcepacksQuery = '';
+let hasMoreResourcepacks = false;
 
 modSearchInput.disabled = true;
 modSearchButton.disabled = true;
+loadMoreButton.classList.add('hidden');
+loadMoreResourcepacksButton.classList.add('hidden');
 
 function formatLoaderName(loader) {
   if (!loader) return '';
@@ -56,6 +80,7 @@ function formatLoaderName(loader) {
 }
 
 function log(message) {
+  if (!logsEnabled) return;
   const timestamp = new Date().toLocaleTimeString();
   logs.textContent += `[${timestamp}] ${message}\n`;
   logs.scrollTop = logs.scrollHeight;
@@ -73,6 +98,7 @@ function setProgress(stage, current, total) {
 }
 
 function setActiveTab(tab) {
+  activeTab = tab;
   tabButtons.forEach((button) => {
     button.classList.remove('active');
   });
@@ -82,7 +108,21 @@ function setActiveTab(tab) {
     content.classList.remove('active');
   });
   document.getElementById(`tab-${tab}`).classList.add('active');
-  logs.style.display = tab === 'play' ? 'block' : 'none';
+  updateLogsVisibility();
+}
+
+function updateLogsVisibility() {
+  logs.style.display = logsEnabled && activeTab === 'play' ? 'block' : 'none';
+}
+
+function getFilteredVersions(allVersions) {
+  if (!Array.isArray(allVersions)) return [];
+  const showPrereleases = prereleasesToggle?.checked;
+  return allVersions.filter((version) => {
+    if (version.isCustom || version.isInstalled) return true;
+    if (showPrereleases) return true;
+    return version.type === 'release';
+  });
 }
 
 
@@ -118,10 +158,13 @@ function closeModdedSettings() {
   delete moddedSettingsModal.dataset.versionId;
 }
 
-function renderModsList(mods = []) {
-  modsList.innerHTML = '';
-  if (!mods.length) {
+function renderModsList(mods = [], append = false) {
+  if (!append) {
+    modsList.innerHTML = '';
+  }
+  if (!mods.length && !append) {
     modsList.innerHTML = '<div class="mods-info">No mods found.</div>';
+    loadMoreButton.classList.add('hidden');
     return;
   }
 
@@ -187,6 +230,93 @@ async function loadInstalledMods() {
   }
 }
 
+async function fetchMods(query = '', offset = 0) {
+  if (!currentVersionInfo?.isModded) return;
+  const mcVersion = currentVersionInfo.baseVersion;
+  const loader = currentVersionInfo.loader;
+  try {
+    const response = await window.minecraftLauncher.searchModrinth({
+      query,
+      mcVersion,
+      loader,
+      offset,
+      limit: 25
+    });
+    return response;
+  } catch (error) {
+    log(`Failed to fetch mods: ${error.message}`);
+    return null;
+  }
+}
+
+async function loadInitialMods() {
+  if (!currentVersionInfo?.isModded) return;
+  currentModsOffset = 0;
+  currentModsQuery = '';
+  log(`Loading popular mods for ${formatLoaderName(currentVersionInfo.loader)} ${currentVersionInfo.baseVersion}...`);
+  const response = await fetchMods('', 0);
+  if (response) {
+    renderModsList(response.hits || [], false);
+    hasMoreMods = (response.hits || []).length >= 25;
+    loadMoreButton.classList.toggle('hidden', !hasMoreMods);
+  }
+}
+
+function renderResourcepacksList(resourcepacks = [], append = false) {
+  if (!append) {
+    resourcepacksList.innerHTML = '';
+  }
+  if (!resourcepacks.length && !append) {
+    resourcepacksList.innerHTML = '<div class="resourcepacks-info"><p>No resource packs found.</p></div>';
+    loadMoreResourcepacksButton.classList.add('hidden');
+    return;
+  }
+
+  resourcepacks.forEach((pack) => {
+    const item = document.createElement('div');
+    item.className = 'resourcepack-item';
+    item.innerHTML = `
+      <img class="resourcepack-icon" src="${pack.icon_url || ''}" alt="${pack.title}" />
+      <div class="resourcepack-meta">
+        <h3>${pack.title}</h3>
+        <p>${pack.description || ''}</p>
+      </div>
+      <div class="mod-actions">
+        <button data-project-id="${pack.project_id}">Download</button>
+      </div>
+    `;
+    resourcepacksList.appendChild(item);
+  });
+}
+
+async function fetchResourcepacks(query = '', offset = 0) {
+  try {
+    const mcVersion = versionSelect.value || '1.20';
+    const facets = [
+      ['project_type:resourcepack'],
+      [`versions:${mcVersion}`]
+    ];
+    const url = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query || '')}&limit=25&offset=${offset}&index=relevance&facets=${encodeURIComponent(JSON.stringify(facets))}`;
+    const response = await window.minecraftLauncher.fetchJson(url);
+    return response;
+  } catch (error) {
+    log(`Failed to fetch resource packs: ${error.message}`);
+    return null;
+  }
+}
+
+async function loadInitialResourcepacks() {
+  currentResourcepacksOffset = 0;
+  currentResourcepacksQuery = '';
+  log('Loading popular resource packs...');
+  const response = await fetchResourcepacks('', 0);
+  if (response) {
+    renderResourcepacksList(response.hits || [], false);
+    hasMoreResourcepacks = (response.hits || []).length >= 25;
+    loadMoreResourcepacksButton.classList.toggle('hidden', !hasMoreResourcepacks);
+  }
+}
+
 async function refreshVersionInfo() {
   const versionId = versionSelect.value;
   if (!versionId) return;
@@ -203,6 +333,7 @@ async function refreshVersionInfo() {
         moddedVersionSelect.value = currentVersionInfo.id;
       }
       await loadInstalledMods();
+      await loadInitialMods();
     } else {
       modsInfo.textContent = 'Select a modded version to manage mods.';
       modSearchInput.disabled = true;
@@ -210,6 +341,7 @@ async function refreshVersionInfo() {
       modsList.innerHTML = '';
       installedModsList.innerHTML = '';
       installedMods = [];
+      loadMoreButton.classList.add('hidden');
       moddedVersionSelect.disabled = availableModdedVersions.length === 0;
       setActiveTab('play');
     }
@@ -223,11 +355,13 @@ async function loadModdedVersions() {
     const allVersions = await window.minecraftLauncher.fetchAllVersions();
     availableModdedVersions = (allVersions || []).filter((version) => version.isCustom);
     moddedVersionSelect.innerHTML = '';
+    
+    const placeholderOption = document.createElement('option');
+    placeholderOption.value = '';
+    placeholderOption.textContent = 'Select a version';
+    moddedVersionSelect.appendChild(placeholderOption);
+    
     if (availableModdedVersions.length === 0) {
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent = 'No modded versions';
-      moddedVersionSelect.appendChild(option);
       moddedVersionSelect.disabled = true;
       return;
     }
@@ -255,18 +389,40 @@ if (savedUsername) {
   usernameInput.value = savedUsername;
 }
 
+const storedShowPrereleases = window.localStorage.getItem(PRERELEASES_STORAGE_KEY);
+if (prereleasesToggle) {
+  prereleasesToggle.checked = storedShowPrereleases === 'true';
+}
+
+const storedShowLogs = window.localStorage.getItem(SHOW_LOGS_STORAGE_KEY);
+if (showLogsToggle) {
+  logsEnabled = storedShowLogs !== 'false';
+  showLogsToggle.checked = logsEnabled;
+  updateLogsVisibility();
+}
+
+const storedMemoryLimit = window.localStorage.getItem(MEMORY_LIMIT_STORAGE_KEY);
+if (memoryLimitInput) {
+  const memoryGb = storedMemoryLimit ? Number(storedMemoryLimit) : 4;
+  memoryLimitInput.value = String(memoryGb);
+  memoryLimitValue.textContent = `${memoryGb} GB`;
+}
+
 async function loadVersions() {
   log('Fetching versions...');
   try {
     const allVersions = await window.minecraftLauncher.fetchAllVersions();
     cachedReleaseVersions = (allVersions || []).filter((version) => version.type === 'release');
-    const previousSelection = versionSelect.value;
+    const storedVersion = window.localStorage.getItem(VERSION_STORAGE_KEY);
+    const previousSelection = storedVersion || versionSelect.value;
+    const filteredVersions = getFilteredVersions(allVersions || []);
     versionSelect.innerHTML = '';
-    (allVersions || []).forEach((version) => {
+    filteredVersions.forEach((version) => {
       const option = document.createElement('option');
       option.value = version.id;
       if (version.isCustom) {
-        option.textContent = `${version.id} (custom)`;
+        const loaderText = version.loader ? formatLoaderName(version.loader) : 'Custom';
+        option.textContent = `${version.id} (${loaderText})`;
       } else if (version.isInstalled) {
         option.textContent = `${version.id} (installed)`;
       } else {
@@ -276,11 +432,19 @@ async function loadVersions() {
     });
 
     if (previousSelection) {
-      versionSelect.value = previousSelection;
+      const hasOption = Array.from(versionSelect.options).some((option) => option.value === previousSelection);
+      if (hasOption) {
+        versionSelect.value = previousSelection;
+      }
     }
 
     moddedBaseSelect.innerHTML = '';
-    cachedReleaseVersions.forEach((version) => {
+    const baseVersions = (allVersions || []).filter((version) => {
+      if (version.isCustom) return false;
+      if (prereleasesToggle?.checked) return true;
+      return version.type === 'release';
+    });
+    baseVersions.forEach((version) => {
       const option = document.createElement('option');
       option.value = version.id;
       option.textContent = version.id;
@@ -338,7 +502,8 @@ playButton.addEventListener('click', async () => {
     }
     log('Launching game...');
     const javaPath = javaSelect.value || '';
-    await window.minecraftLauncher.launchGame({ version, username, javaPath });
+    const memoryGb = Number(memoryLimitInput?.value || 4);
+    await window.minecraftLauncher.launchGame({ version, username, javaPath, memoryGb });
   } catch (error) {
     log(`Error: ${error.message}`);
   }
@@ -347,10 +512,33 @@ playButton.addEventListener('click', async () => {
 tabButtons.forEach((button) => {
   button.addEventListener('click', () => {
     setActiveTab(button.dataset.tab);
+    if (button.dataset.tab === 'resourcepacks') {
+      loadInitialResourcepacks();
+    }
   });
 });
 
+prereleasesToggle?.addEventListener('change', async () => {
+  window.localStorage.setItem(PRERELEASES_STORAGE_KEY, String(prereleasesToggle.checked));
+  await loadVersions();
+});
+
+showLogsToggle?.addEventListener('change', () => {
+  logsEnabled = Boolean(showLogsToggle.checked);
+  window.localStorage.setItem(SHOW_LOGS_STORAGE_KEY, String(logsEnabled));
+  updateLogsVisibility();
+});
+
+memoryLimitInput?.addEventListener('input', () => {
+  const memoryGb = Number(memoryLimitInput.value || 4);
+  memoryLimitValue.textContent = `${memoryGb} GB`;
+  window.localStorage.setItem(MEMORY_LIMIT_STORAGE_KEY, String(memoryGb));
+});
+
 versionSelect.addEventListener('change', () => {
+  if (versionSelect.value) {
+    window.localStorage.setItem(VERSION_STORAGE_KEY, versionSelect.value);
+  }
   refreshVersionInfo();
 });
 
@@ -453,18 +641,50 @@ modSearchButton.addEventListener('click', async () => {
     return;
   }
   const query = modSearchInput.value.trim();
-  const mcVersion = currentVersionInfo.baseVersion;
-  const loader = currentVersionInfo.loader;
-  try {
-    log(`Fetching mods for ${formatLoaderName(loader)} ${mcVersion}...`);
-    const response = await window.minecraftLauncher.searchModrinth({
-      query,
-      mcVersion,
-      loader
-    });
-    renderModsList(response.hits || []);
-  } catch (error) {
-    log(`Failed to fetch mods: ${error.message}`);
+  currentModsQuery = query;
+  currentModsOffset = 0;
+  log(`Searching mods: "${query || 'all'}"...`);
+  const response = await fetchMods(query, 0);
+  if (response) {
+    renderModsList(response.hits || [], false);
+    hasMoreMods = (response.hits || []).length >= 25;
+    loadMoreButton.classList.toggle('hidden', !hasMoreMods);
+  }
+});
+
+loadMoreButton.addEventListener('click', async () => {
+  if (!currentVersionInfo?.isModded) return;
+  currentModsOffset += 25;
+  log(`Loading more mods (offset ${currentModsOffset})...`);
+  const response = await fetchMods(currentModsQuery, currentModsOffset);
+  if (response) {
+    renderModsList(response.hits || [], true);
+    hasMoreMods = (response.hits || []).length >= 25;
+    loadMoreButton.classList.toggle('hidden', !hasMoreMods);
+  }
+});
+
+resourcepackSearchButton.addEventListener('click', async () => {
+  const query = resourcepackSearchInput.value.trim();
+  currentResourcepacksQuery = query;
+  currentResourcepacksOffset = 0;
+  log(`Searching resource packs: "${query || 'all'}"...`);
+  const response = await fetchResourcepacks(query, 0);
+  if (response) {
+    renderResourcepacksList(response.hits || [], false);
+    hasMoreResourcepacks = (response.hits || []).length >= 25;
+    loadMoreResourcepacksButton.classList.toggle('hidden', !hasMoreResourcepacks);
+  }
+});
+
+loadMoreResourcepacksButton.addEventListener('click', async () => {
+  currentResourcepacksOffset += 25;
+  log(`Loading more resource packs (offset ${currentResourcepacksOffset})...`);
+  const response = await fetchResourcepacks(currentResourcepacksQuery, currentResourcepacksOffset);
+  if (response) {
+    renderResourcepacksList(response.hits || [], true);
+    hasMoreResourcepacks = (response.hits || []).length >= 25;
+    loadMoreResourcepacksButton.classList.toggle('hidden', !hasMoreResourcepacks);
   }
 });
 
@@ -499,13 +719,14 @@ modsList.addEventListener('click', async (event) => {
     }
     await loadInstalledMods();
     const query = modSearchInput.value.trim();
-    if (query) {
-      const response = await window.minecraftLauncher.searchModrinth({
-        query,
-        mcVersion: currentVersionInfo.baseVersion,
-        loader: currentVersionInfo.loader
-      });
-      renderModsList(response.hits || []);
+    if (query || currentModsOffset > 0) {
+      currentModsOffset = 0;
+      const response = await fetchMods(currentModsQuery, 0);
+      if (response) {
+        renderModsList(response.hits || [], false);
+        hasMoreMods = (response.hits || []).length >= 25;
+        loadMoreButton.classList.toggle('hidden', !hasMoreMods);
+      }
     }
   } catch (error) {
     log(`Failed to update mod: ${error.message}`);
@@ -523,13 +744,14 @@ installedModsList.addEventListener('click', async (event) => {
     });
     await loadInstalledMods();
     const query = modSearchInput.value.trim();
-    if (query) {
-      const response = await window.minecraftLauncher.searchModrinth({
-        query,
-        mcVersion: currentVersionInfo.baseVersion,
-        loader: currentVersionInfo.loader
-      });
-      renderModsList(response.hits || []);
+    if (query || currentModsOffset > 0) {
+      currentModsOffset = 0;
+      const response = await fetchMods(currentModsQuery, 0);
+      if (response) {
+        renderModsList(response.hits || [], false);
+        hasMoreMods = (response.hits || []).length >= 25;
+        loadMoreButton.classList.toggle('hidden', !hasMoreMods);
+      }
     }
   } catch (error) {
     log(`Failed to remove mod: ${error.message}`);

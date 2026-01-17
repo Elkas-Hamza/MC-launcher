@@ -7,13 +7,13 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <div class="tabs">
+      <button class="tab-button active" data-tab="play">Play</button>
+      <button class="tab-button" data-tab="mods">Mods</button>
+      <button class="tab-button" data-tab="resourcepacks">Resource Packs</button>
+      <button class="tab-button" data-tab="config">Config</button>
+    </div>
     <div class="container">
-      <h1>Minecraft Offline Launcher</h1>
-      <div class="tabs">
-        <button class="tab-button active" data-tab="play">Play</button>
-        <button class="tab-button" data-tab="mods">Mods</button>
-        <button class="tab-button" data-tab="config">Config</button>
-      </div>
 
       <div class="tab-content active" id="tab-play">
         <div class="play-info">Select a version and press Play to launch.</div>
@@ -42,6 +42,7 @@
             </div>
 
             <div id="mods-list" class="mods-list"></div>
+            <button id="load-more-mods" class="load-more-btn hidden">Load More</button>
           </div>
 
           <div class="mods-sidebar">
@@ -51,10 +52,56 @@
         </div>
       </div>
 
+      <div class="tab-content" id="tab-resourcepacks">
+        <div class="resourcepacks-info">
+          <p>Browse and install resource packs for your Minecraft versions.</p>
+        </div>
+
+        <div class="resourcepacks-search">
+          <input id="resourcepack-search" type="text" placeholder="Search resource packs..." />
+          <button id="resourcepack-search-btn">Search</button>
+        </div>
+
+        <div class="resourcepacks-layout">
+          <div class="resourcepacks-main">
+            <div id="resourcepacks-list" class="resourcepacks-list"></div>
+            <button id="load-more-resourcepacks" class="load-more-btn hidden">Load More</button>
+          </div>
+
+          <div class="resourcepacks-sidebar">
+            <h3>Installed Resource Packs</h3>
+            <div id="installed-resourcepacks" class="installed-resourcepacks"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="tab-content" id="tab-config">
         <div class="form">
           <label for="java">Java Runtime</label>
           <select id="java"></select>
+        </div>
+
+        <div class="config-section">
+          <div class="config-title">Display</div>
+          <label class="toggle-row" for="show-prereleases">
+            <input type="checkbox" id="show-prereleases" />
+            <span>Show prereleases (snapshots)</span>
+          </label>
+          <label class="toggle-row" for="show-logs">
+            <input type="checkbox" id="show-logs" />
+            <span>Show logs</span>
+          </label>
+        </div>
+
+        <div class="config-section">
+          <div class="config-title">Performance</div>
+          <div class="range-row">
+            <label for="memory-limit">Memory limit</label>
+            <div class="range-control">
+              <input type="range" id="memory-limit" min="2" max="16" step="1" />
+              <span id="memory-limit-value">4 GB</span>
+            </div>
+          </div>
         </div>
       </div>
 

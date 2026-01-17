@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
+const dns = require('dns');
 const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
@@ -131,7 +132,36 @@ function listInstalledVersions() {
 }
 
 async function listAllVersionsSorted() {
-  const manifest = await getManifest();
+  let manifest;
+  try {
+    manifest = await getManifestWithRetry({ attempts: 3, baseDelayMs: 200 });
+  } catch (error) {
+    const online = await hasInternetConnection();
+    if (online) throw error;
+    log('Offline detected. Using installed versions only.');
+    const installedOnly = listInstalledVersions();
+    const combinedOffline = installedOnly.map((versionId) => {
+      const json = loadVersionJson(versionId);
+      const meta = getLauncherMetadata(json);
+      const baseVersion = meta?.baseVersion || json?.inheritsFrom || null;
+      return {
+        id: versionId,
+        type: json?.type || 'custom',
+        releaseTime: json?.releaseTime || json?.time || null,
+        isInstalled: true,
+        isCustom: Boolean(baseVersion),
+        baseVersion
+      };
+    });
+    combinedOffline.sort((a, b) => {
+      const aTime = a.releaseTime ? Date.parse(a.releaseTime) : 0;
+      const bTime = b.releaseTime ? Date.parse(b.releaseTime) : 0;
+      if (aTime !== bTime) return bTime - aTime;
+      return a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    return combinedOffline;
+  }
+
   const releases = manifest.versions || [];
   const installed = new Set(listInstalledVersions());
   const releaseMap = new Map(releases.map((version) => [version.id, version]));
@@ -161,7 +191,8 @@ async function listAllVersionsSorted() {
       releaseTime: baseRelease?.releaseTime || null,
       isInstalled: true,
       isCustom: true,
-      baseVersion
+      baseVersion,
+      loader: meta?.loader || null
     });
   });
 
@@ -438,6 +469,35 @@ async function getManifest() {
     cachedManifest = await fetchJson(MANIFEST_URL);
   }
   return cachedManifest;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getManifestWithRetry({ attempts = 3, baseDelayMs = 200 } = {}) {
+  let lastError;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await getManifest();
+    } catch (error) {
+      lastError = error;
+      if (i < attempts - 1) {
+        log(`Failed to fetch manifest. Retrying immediately...`);
+        await delay(baseDelayMs);
+      }
+    }
+  }
+  throw lastError;
+}
+
+async function hasInternetConnection(timeoutMs = 2000) {
+  const check = dns.promises
+    .resolve('cloudflare.com')
+    .then(() => true)
+    .catch(() => false);
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs));
+  return Promise.race([check, timeout]);
 }
 
 function isForgeLikeLibrary(libraryName) {
@@ -717,6 +777,16 @@ function getLauncherMetadata(versionJson) {
     return versionJson.launcher;
   }
   return null;
+}
+
+function applyMemoryLimit(jvmArgs, memoryGb) {
+  if (!memoryGb || Number.isNaN(memoryGb)) return;
+  const memoryValue = Math.max(1, Math.floor(memoryGb));
+  const filtered = jvmArgs.filter((arg) => !arg.startsWith('-Xmx') && !arg.startsWith('-Xms'));
+  const minValue = Math.max(1, Math.min(2, Math.floor(memoryValue / 2) || 1));
+  filtered.push(`-Xmx${memoryValue}G`, `-Xms${minValue}G`);
+  jvmArgs.length = 0;
+  jvmArgs.push(...filtered);
 }
 
 function assertValidClientJar(clientJarPath) {
@@ -1346,14 +1416,14 @@ async function createModdedProfile({ customName, baseVersion, loader }) {
   return { id: customName, loader, baseVersion };
 }
 
-async function searchModrinthMods({ query, mcVersion, loader }) {
+async function searchModrinthMods({ query, mcVersion, loader, offset = 0, limit = 25 }) {
   const facets = [
     ['project_type:mod'],
     [`versions:${mcVersion}`],
     [`categories:${loader}`],
     ['client_side:required', 'client_side:optional']
   ];
-  const url = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query || '')}&limit=20&index=relevance&facets=${encodeURIComponent(JSON.stringify(facets))}`;
+  const url = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query || '')}&limit=${limit}&offset=${offset}&index=relevance&facets=${encodeURIComponent(JSON.stringify(facets))}`;
   return fetchJson(url);
 }
 
@@ -1444,12 +1514,16 @@ ipcMain.handle('create-modded-version', async (_event, payload) => {
 });
 
 ipcMain.handle('search-modrinth', async (_event, payload) => {
-  const { query, mcVersion, loader } = payload;
-  return searchModrinthMods({ query, mcVersion, loader });
+  const { query, mcVersion, loader, offset, limit } = payload;
+  return searchModrinthMods({ query, mcVersion, loader, offset, limit });
 });
 
 ipcMain.handle('install-mod', async (_event, payload) => {
   return installModrinthMod(payload);
+});
+
+ipcMain.handle('fetch-json', async (_event, url) => {
+  return fetchJson(url);
 });
 
 ipcMain.handle('list-installed-mods', async (_event, profileName) => {
@@ -1491,6 +1565,7 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   const versionId = payload.version;
   const username = payload.username || 'Player';
   const javaPathOverride = payload.javaPath;
+  const memoryGb = Number(payload.memoryGb || 0);
 
   const javaExecutable = getPreferredJava(javaPathOverride);
   if (!javaExecutable) {
@@ -1594,6 +1669,10 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   } else {
     jvmArgs.push('-Xmx2G', '-Xms1G');
     jvmArgs.push(`-Djava.library.path=${nativesDir}`);
+  }
+
+  if (memoryGb) {
+    applyMemoryLimit(jvmArgs, memoryGb);
   }
 
   if (modsDir && meta?.loader === 'fabric') {
