@@ -8,6 +8,8 @@ const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 const lzma = require('lzma');
 
+app.disableHardwareAcceleration();
+
 const MANUAL_JAVA_PATH = '';
 const MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest.json';
 

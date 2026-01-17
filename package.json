@@ -1,7 +1,7 @@
 {
   "name": "mclauncher",
   "version": "1.0.0",
-  "description": "Offline Minecraft launcher built by Elkas-hamza",
+  "description": "Minecraft launcher built by Elkas-hamza",
   "main": "app/main.js",
   "author": "",
   "license": "MIT",
@@ -22,13 +22,13 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "build/icon.ico",
+      "icon": "build/favicon.ico",
       "artifactName": "${productName}-Setup-${version}.${ext}",
       "signAndEditExecutable": false
     },
     "nsis": {
-      "installerIcon": "build/icon.ico",
-      "uninstallerIcon": "build/icon.ico",
+      "installerIcon": "build/favicon.ico",
+      "uninstallerIcon": "build/favicon.ico",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
