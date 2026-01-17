@@ -1,53 +1,129 @@
-# 🎮 MClauncher - First Release
+# MC-launcher
 
-## What's New
-- Initial release of MClauncher - A lightweight offline Minecraft launcher built with Electron
+[![Status](https://img.shields.io/badge/status-alpha-orange)](https://github.com/Elkas-Hamza/MC-launcher)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-### Features
-- **Version Management**
-  - Download and install any Minecraft version
-  - Separate game directories for each version
-  
-- **Complete Game Support**
-  - Full asset and library downloading
-  - Native library extraction
-  - Automatic Java detection
-  - Launch game with proper configurations
+A lightweight, user-friendly free Minecraft launcher to manage installations, versions, mods, and player profiles. MC-launcher aims to provide a fast, reliable, and extensible launcher experience for single-player and modded Minecraft.
 
-- **Modding & Customization**
-  - Dedicated mods folder for each version
-  - Resource packs management
-  - Independent game saves per version
+## Features
 
-- **Clean Interface**
-  - No default menu bar (clean UI)
-  - Simple and intuitive design
-  - Real-time download progress
-  - Detailed logging
+- Manage multiple Minecraft installations and profiles
+- Download and launch official Minecraft versions
+- Support for mod loaders (Forge, Fabric) — configurable
+- Simple UI for creating and switching profiles
+- Automatic updates for game files and launcher
+- Extensible plugin/mod system (planned)
 
-### Installation
-1. Download `MClauncher-Setup-0.1.0.exe` from the releases
-2. Run the installer and follow the setup wizard
-3. Launch MClauncher from your desktop or Start Menu
-4. Select a Minecraft version and click install
-5. Once installed, click "Launch Game" to play
+## Table of Contents
 
-### Requirements
-- **OS:** Windows 10/11 (x64)
-- **Java:** Automatic detection (Java 8+ recommended)
-- **Disk Space:** Varies by Minecraft version (~500MB - 2GB)
-- **Internet:** Required for initial version downloads
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Development (build from source)](#development-build-from-source)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
+- [Contact](#contact)
 
-### Known Issues
-- First launch may show GPU cache warnings (harmless, can be ignored)
-- Java auto-detection may fail on some systems (manual path can be set)
+## Requirements
 
-### Technical Details
-- Built with Electron 30.5.1
-- Unsigned executable (Windows may show SmartScreen warning - click "More info" → "Run anyway")
-- Portable game data stored in user AppData
+List the runtime and development prerequisites here. Example common requirements:
 
----
-**Version:** 0.1.0  
-**Build Date:** January 17, 2026  
-**License:** MIT
+- Java 17+ (for a Java-based launcher) — download: [Adoptium](https://adoptium.net/)
+- Recommended: 4 GB free disk space for game files
+
+## Installation
+
+Important: The recommended and supported way to install MC-launcher is via the GitHub Releases page. Prebuilt binaries and installers for supported platforms are published there.
+
+1. Visit the Releases page:
+   - https://github.com/Elkas-Hamza/MC-launcher/releases
+
+2. Download the asset that matches your platform (file names and asset types may vary by release):
+   - Windows: `MC-launcher-setup-x.y.z.exe` or `MC-launcher-x.y.z.zip` — run the installer or extract and run the executable.
+
+4. Run the launcher:
+   - On Windows: double-click the installer or executable.
+
+Notes:
+- Releases are the easiest way to get updates and are the distribution method for end users. Check the Releases page for change logs and installation assets.
+- If you prefer building from source or contributing, see the "Development (build from source)" section below.
+
+## Quick Start
+
+1. Install the required runtime (Java).
+2. Open MC-launcher.
+3. Create a new profile in the launcher UI and choose a Minecraft version.
+4. Click "Download" to fetch game assets and then "Play" to start Minecraft.
+
+## Usage
+
+- Create and name profiles (e.g., "Vanilla 1.20", "Modded Forge 1.12.2")
+- Add JVM arguments if needed (`-Xmx2G`, etc.)
+- Use the "Mod Manager" (if implemented) to install/uninstall mods per profile
+- Check logs in the UI
+
+## Development (build from source)
+
+If you want to build or run the project yourself (for development or testing), follow these steps after cloning the repository.
+
+Clone the repository:
+
+```bash
+git clone https://github.com/Elkas-Hamza/MC-launcher.git
+cd MC-launcher
+```
+
+Build and run — example commands (adjust to your project's tooling):
+
+
+
+Node / Electron 
+```bash
+npm install
+npm run start
+# or for packaging
+npm run build
+```
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Open an issue to discuss major changes or feature requests.
+2. Follow the branching model: feature branches off `main`.
+3. Keep commits small and focused; reference issues in PRs.
+4. Ensure tests pass on your branch and CI (if any).
+
+Include a CONTRIBUTING.md if you have repository-specific guidelines.
+
+## Security & EULA
+
+- This project may download official Minecraft assets. You are responsible for complying with Mojang's terms and the Minecraft EULA: https://account.mojang.com/documents/minecraft_eula
+- Never include credentials or personal tokens in configs or PRs.
+- Report security issues privately via GitHub Security Advisories.
+
+## Roadmap
+
+Planned milestones:
+- [ ] Stable release (v1.0)
+- [ ] Plugin API for third-party extensions
+- [ ] Add support for mac and linux
+- [ ] Cross-platform installer packages
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details. Replace with your preferred license if different.
+
+## Acknowledgements
+
+- Minecraft and Mojang for the original game
+- Open-source libraries and projects used (Forge, Fabric, LWJGL, Electron)
+
+## Contact
+
+Maintainer: Elkas-Hamza  
+Repo: https://github.com/Elkas-Hamza/MC-launcher
+
+If you'd like, tell me which packaging formats you plan to publish in Releases (installer, AppImage, JAR, etc.) and I will update the Installation section with exact file names and example commands for each platform, plus an optional sample release checklist.
