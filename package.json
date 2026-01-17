@@ -1,19 +1,46 @@
 {
-  "name": "minecraft-offline-launcher",
+  "name": "mclauncher",
   "version": "1.0.0",
-  "description": "Offline Minecraft launcher built with Electron",
+  "description": "Offline Minecraft launcher built by Elkas-hamza",
   "main": "app/main.js",
   "author": "",
   "license": "MIT",
   "type": "commonjs",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "build": {
+    "appId": "com.elkas.minecraft.launcher",
+    "productName": "MClauncher",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "app/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   },
   "dependencies": {
     "adm-zip": "^0.5.10",
     "lzma": "^2.3.2"
   },
   "devDependencies": {
-    "electron": "^30.0.0"
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3"
   }
 }

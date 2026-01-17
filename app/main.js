@@ -13,6 +13,8 @@ const MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest.j
 
 let mainWindow;
 let cachedManifest = null;
+let isPreparingGame = false;
+let cancelPreparation = false;
 
 const minecraftDir = path.join(app.getPath('userData'), '.minecraft');
 const versionsDir = path.join(minecraftDir, 'versions');
@@ -28,6 +30,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
     height: 600,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -36,6 +39,8 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.removeMenu();
 }
 
 app.whenReady().then(() => {
@@ -611,6 +616,10 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
   const nativeClassifier = getNativeClassifier();
 
   for (const library of allowedLibraries) {
+    if (cancelPreparation) {
+      throw new Error('Download cancelled');
+    }
+    
     const artifact = library.downloads?.artifact;
     if (artifact && artifact.path) {
       let artifactPath = artifact.path;
@@ -673,6 +682,9 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
   reportProgress('Downloading libraries', completed, total);
 
   for (const item of artifacts) {
+    if (cancelPreparation) {
+      throw new Error('Download cancelled');
+    }
     await downloadFile(item.url, item.path, { expectedSha1: item.sha1, expectedSize: item.size });
     completed += 1;
     reportProgress('Downloading libraries', completed, total);
@@ -680,6 +692,9 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
 
   ensureDir(targetNativesDir);
   for (const item of natives) {
+    if (cancelPreparation) {
+      throw new Error('Download cancelled');
+    }
     await downloadFile(item.url, item.path, { expectedSha1: item.sha1, expectedSize: item.size });
     const exclude = item.extract?.exclude || [];
     await extractNativeJar(item.path, targetNativesDir, exclude);
@@ -712,6 +727,10 @@ async function downloadAssets(assetIndex) {
 
   async function worker() {
     while (currentIndex < entries.length) {
+      if (cancelPreparation) {
+        throw new Error('Download cancelled');
+      }
+      
       const index = currentIndex;
       currentIndex += 1;
       const object = entries[index];
@@ -943,7 +962,7 @@ async function buildForgeClientJarFromInstaller({ baseVersion, installerPath, ta
       .replaceAll('{MINECRAFT_VERSION}', baseVersion);
   };
 
-  const runProcessor = (processor, side) => {
+  const runProcessor = async (processor, side) => {
     const jarPath = resolveLibraryPath(processor.jar);
     if (!jarPath) {
       throw new Error(`Processor jar not found: ${processor.jar}`);
@@ -952,13 +971,13 @@ async function buildForgeClientJarFromInstaller({ baseVersion, installerPath, ta
       .map((name) => resolveLibraryPath(name))
       .filter(Boolean);
     const args = (processor.args || []).map((arg) => replaceVars(arg, side));
-    runJavaTool({ javaExecutable, jarPath, classpathEntries: classpath, args });
+    await runJavaTool({ javaExecutable, jarPath, classpathEntries: classpath, args });
   };
 
   for (const processor of processors) {
     const sides = processor.sides || ['client', 'server'];
     if (!sides.includes('client')) continue;
-    runProcessor(processor, 'client');
+    await runProcessor(processor, 'client');
   }
 
   const candidatePaths = [patchedPath, mcOffPath];
@@ -1340,21 +1359,43 @@ function getJarMainClass(jarPath) {
 }
 
 function runJavaTool({ javaExecutable, jarPath, classpathEntries = [], args = [] }) {
-  const mainClass = getJarMainClass(jarPath);
-  if (!mainClass) {
-    throw new Error(`Main-Class not found in ${jarPath}`);
-  }
-  const classpathSeparator = process.platform === 'win32' ? ';' : ':';
-  const classpath = [jarPath, ...classpathEntries].join(classpathSeparator);
-  const result = spawnSync(javaExecutable, ['-cp', classpath, mainClass, ...args], {
-    stdio: 'inherit'
+  return new Promise((resolve, reject) => {
+    const mainClass = getJarMainClass(jarPath);
+    if (!mainClass) {
+      return reject(new Error(`Main-Class not found in ${jarPath}`));
+    }
+    const classpathSeparator = process.platform === 'win32' ? ';' : ':';
+    const classpath = [jarPath, ...classpathEntries].join(classpathSeparator);
+    const child = spawn(javaExecutable, ['-cp', classpath, mainClass, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    
+    let stdout = '';
+    let stderr = '';
+    
+    child.stdout?.on('data', (data) => {
+      stdout += data.toString();
+    });
+    
+    child.stderr?.on('data', (data) => {
+      stderr += data.toString();
+    });
+    
+    child.on('error', (error) => {
+      reject(error);
+    });
+    
+    child.on('close', (code) => {
+      if (code !== 0) {
+        if (stderr) {
+          log(`Forge processor error: ${stderr.trim()}`);
+        }
+        reject(new Error(`Java tool failed (${jarPath}) with exit code ${code}.`));
+      } else {
+        resolve();
+      }
+    });
   });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(`Java tool failed (${jarPath}) with exit code ${result.status}.`);
-  }
 }
 
 async function createForgeProfile(baseVersion, loaderType) {
@@ -1694,18 +1735,23 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   const javaPathOverride = payload.javaPath;
   const memoryGb = Number(payload.memoryGb || 0);
 
-  const javaExecutable = getPreferredJava(javaPathOverride);
-  if (!javaExecutable) {
-    throw new Error('Java not found. Install Java or set MANUAL_JAVA_PATH in main.js');
-  }
+  isPreparingGame = true;
+  cancelPreparation = false;
+  mainWindow?.webContents.send('preparation-state', true);
 
-  const versionJson = loadVersionJson(versionId);
-  if (!versionJson) {
-    throw new Error('Version files not found. Please download the version first.');
-  }
+  try {
+    const javaExecutable = getPreferredJava(javaPathOverride);
+    if (!javaExecutable) {
+      throw new Error('Java not found. Install Java or set MANUAL_JAVA_PATH in main.js');
+    }
 
-  const isModded = Boolean(getLauncherMetadata(versionJson)?.modded);
-  const paths = ensureVersionRuntimeLayout(versionId, isModded);
+    const versionJson = loadVersionJson(versionId);
+    if (!versionJson) {
+      throw new Error('Version files not found. Please download the version first.');
+    }
+
+    const isModded = Boolean(getLauncherMetadata(versionJson)?.modded);
+    const paths = ensureVersionRuntimeLayout(versionId, isModded);
   const resolved = resolveVersionChain(versionId);
   
   log(`Version: ${versionId}`);
@@ -1724,14 +1770,26 @@ ipcMain.handle('launch-game', async (_event, payload) => {
     }
   }
 
+  if (cancelPreparation) {
+    throw new Error('Preparation cancelled');
+  }
+
   if (Array.isArray(resolved.libraries) && resolved.libraries.length > 0) {
     log('Ensuring libraries...');
     await downloadLibraries(resolved.libraries, versionId, librariesDir, paths.nativesDir);
   }
 
+  if (cancelPreparation) {
+    throw new Error('Preparation cancelled');
+  }
+
   if (resolved.assetIndex?.url) {
     log('Ensuring assets...');
     await downloadAssets(resolved.assetIndex);
+  }
+
+  if (cancelPreparation) {
+    throw new Error('Preparation cancelled');
   }
 
   const classpathEntries = [];
@@ -1887,4 +1945,26 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   });
 
   return true;
+  } catch (error) {
+    // Handle cancellation gracefully
+    if (error.message === 'Download cancelled' || error.message === 'Preparation cancelled') {
+      log('Preparation cancelled by user.');
+      reportProgress('Cancelled', 0, 0);
+      return false;
+    }
+    throw error;
+  } finally {
+    isPreparingGame = false;
+    cancelPreparation = false;
+    mainWindow?.webContents.send('preparation-state', false);
+  }
+});
+
+ipcMain.handle('cancel-preparation', async () => {
+  if (isPreparingGame) {
+    cancelPreparation = true;
+    log('Cancelling preparation...');
+    return true;
+  }
+  return false;
 });

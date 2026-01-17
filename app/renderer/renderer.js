@@ -87,9 +87,9 @@ function log(message) {
 }
 
 function setProgress(stage, current, total) {
-  if (!total || total === 0) {
+  if (!total || total === 0 || stage === 'Cancelled') {
     progressBar.style.width = '0%';
-    progressText.textContent = stage || 'Idle';
+    progressText.textContent = 'Idle';
     return;
   }
   const percent = Math.floor((current / total) * 100);
@@ -544,6 +544,13 @@ async function loadJava() {
 }
 
 playButton.addEventListener('click', async () => {
+  // If already preparing, cancel it
+  if (playButton.textContent === 'Stop') {
+    await window.minecraftLauncher.cancelPreparation();
+    playButton.textContent = 'Play';
+    return;
+  }
+
   const username = usernameInput.value.trim() || 'Player';
   window.localStorage.setItem(USERNAME_STORAGE_KEY, username);
   const version = versionSelect.value;
@@ -553,6 +560,7 @@ playButton.addEventListener('click', async () => {
   }
 
   try {
+    playButton.textContent = 'Stop';
     log(`Preparing ${version}...`);
     if (!currentVersionInfo?.isModded) {
       await window.minecraftLauncher.downloadVersion(version);
@@ -561,8 +569,10 @@ playButton.addEventListener('click', async () => {
     const javaPath = javaSelect.value || '';
     const memoryGb = Number(memoryLimitInput?.value || 4);
     await window.minecraftLauncher.launchGame({ version, username, javaPath, memoryGb });
+    playButton.textContent = 'Play';
   } catch (error) {
     log(`Error: ${error.message}`);
+    playButton.textContent = 'Play';
   }
 });
 
@@ -879,3 +889,8 @@ loadVersions();
 loadJava();
 refreshVersionInfo();
 loadModdedVersions();
+
+// Listen for preparation state changes
+window.minecraftLauncher.onPreparationState((isActive) => {
+  playButton.textContent = isActive ? 'Stop' : 'Play';
+});

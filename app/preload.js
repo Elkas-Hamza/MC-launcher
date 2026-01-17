@@ -20,7 +20,9 @@ contextBridge.exposeInMainWorld('minecraftLauncher', {
   removeResourcepack: (payload) => ipcRenderer.invoke('remove-resourcepack', payload),
   downloadVersion: (version) => ipcRenderer.invoke('download-version', version),
   launchGame: (payload) => ipcRenderer.invoke('launch-game', payload),
+  cancelPreparation: () => ipcRenderer.invoke('cancel-preparation'),
   fetchJson: (url) => ipcRenderer.invoke('fetch-json', url),
   onLog: (callback) => ipcRenderer.on('log', (_event, message) => callback(message)),
-  onProgress: (callback) => ipcRenderer.on('progress', (_event, data) => callback(data))
+  onProgress: (callback) => ipcRenderer.on('progress', (_event, data) => callback(data)),
+  onPreparationState: (callback) => ipcRenderer.on('preparation-state', (_event, isActive) => callback(isActive))
 });
