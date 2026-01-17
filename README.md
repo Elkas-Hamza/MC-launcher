@@ -1,31 +1,53 @@
-# Minecraft Offline Launcher
+# 🎮 MClauncher - First Release
 
-Offline Minecraft launcher built with Electron, Node.js, and vanilla HTML/CSS/JS.
+## What's New
+- Initial release of MClauncher - A lightweight offline Minecraft launcher built with Electron
 
-## Features
+### Features
+- **Version Management**
+  - Download and install any Minecraft version
+  - Separate game directories for each version
+  
+- **Complete Game Support**
+  - Full asset and library downloading
+  - Native library extraction
+  - Automatic Java detection
+  - Launch game with proper configurations
 
-- Fetches Mojang version manifest
-- Downloads client, libraries, asset indexes, and assets
-- Offline launch (no Microsoft/Mojang authentication)
-- Logs progress and status in the UI
-- Mods tab with Modrinth search and per-profile mod folders
+- **Modding & Customization**
+  - Dedicated mods folder for each version
+  - Resource packs management
+  - Independent game saves per version
 
-## Setup
+- **Clean Interface**
+  - No default menu bar (clean UI)
+  - Simple and intuitive design
+  - Real-time download progress
+  - Detailed logging
 
-1. Install dependencies:
-   - `npm install`
+### Installation
+1. Download `MClauncher-Setup-0.1.0.exe` from the releases
+2. Run the installer and follow the setup wizard
+3. Launch MClauncher from your desktop or Start Menu
+4. Select a Minecraft version and click install
+5. Once installed, click "Launch Game" to play
 
-2. Start the app:
-   - `npm start`
+### Requirements
+- **OS:** Windows 10/11 (x64)
+- **Java:** Automatic detection (Java 8+ recommended)
+- **Disk Space:** Varies by Minecraft version (~500MB - 2GB)
+- **Internet:** Required for initial version downloads
 
-## Java detection
+### Known Issues
+- First launch may show GPU cache warnings (harmless, can be ignored)
+- Java auto-detection may fail on some systems (manual path can be set)
 
-The launcher automatically detects installed Java runtimes and lets you select one in the UI. The latest detected version is selected by default. If Java is not found, open app/main.js and set `MANUAL_JAVA_PATH` to a full path to your Java executable.
+### Technical Details
+- Built with Electron 30.5.1
+- Unsigned executable (Windows may show SmartScreen warning - click "More info" → "Run anyway")
+- Portable game data stored in user AppData
 
-## Data location
-
-Minecraft data is stored under the Electron user data directory in a `.minecraft` folder. The launcher passes that folder as `--gameDir` and uses it for assets and libraries.
-
-## Mods
-
-Use the Mods tab to create modded profiles (Fabric/Forge/Quilt/NeoForge). Each profile is created under `.minecraft/versions/<customName>/` with its own mods folder at `.minecraft/mods/<customName>/`.
+---
+**Version:** 0.1.0  
+**Build Date:** January 17, 2026  
+**License:** MIT
