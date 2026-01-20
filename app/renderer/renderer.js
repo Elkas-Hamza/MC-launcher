@@ -27,6 +27,11 @@ const resourcepackSearchButton = document.getElementById('resourcepack-search-bt
 const resourcepacksList = document.getElementById('resourcepacks-list');
 const loadMoreResourcepacksButton = document.getElementById('load-more-resourcepacks');
 const installedResourcepacksList = document.getElementById('installed-resourcepacks');
+const shaderSearchInput = document.getElementById('shader-search');
+const shaderSearchButton = document.getElementById('shader-search-btn');
+const shadersList = document.getElementById('shaders-list');
+const loadMoreShadersButton = document.getElementById('load-more-shaders');
+const installedShadersList = document.getElementById('installed-shaders');
 const modal = document.getElementById('modal');
 const moddedSettingsModal = document.getElementById('modded-settings-modal');
 const moddedNameInput = document.getElementById('modded-name');
@@ -49,6 +54,10 @@ const memoryLimitInput = document.getElementById('memory-limit');
 const memoryLimitValue = document.getElementById('memory-limit-value');
 const progressBar = document.getElementById('progress-bar');
 const progressText = document.getElementById('progress-text');
+const refreshInstalledVersionsBtn = document.getElementById('refresh-installed-versions');
+const installedVersionsSelect = document.getElementById('installed-versions-select');
+const fixVersionBtn = document.getElementById('fix-version-btn');
+const deleteVersionBtn = document.getElementById('delete-version-btn');
 
 const USERNAME_STORAGE_KEY = 'minecraftLauncher.username';
 const VERSION_STORAGE_KEY = 'minecraftLauncher.selectedVersion';
@@ -67,11 +76,15 @@ let hasMoreMods = false;
 let currentResourcepacksOffset = 0;
 let currentResourcepacksQuery = '';
 let hasMoreResourcepacks = false;
+let currentShadersOffset = 0;
+let currentShadersQuery = '';
+let hasMoreShaders = false;
 
 modSearchInput.disabled = true;
 modSearchButton.disabled = true;
 loadMoreButton.classList.add('hidden');
 loadMoreResourcepacksButton.classList.add('hidden');
+loadMoreShadersButton.classList.add('hidden');
 
 function formatLoaderName(loader) {
   if (!loader) return '';
@@ -86,7 +99,7 @@ function log(message) {
   logs.scrollTop = logs.scrollHeight;
 }
 
-function setProgress(stage, current, total) {
+function setProgress(stage, current, total, downloadStats = null) {
   if (!total || total === 0 || stage === 'Cancelled') {
     progressBar.style.width = '0%';
     progressText.textContent = 'Idle';
@@ -94,7 +107,20 @@ function setProgress(stage, current, total) {
   }
   const percent = Math.floor((current / total) * 100);
   progressBar.style.width = `${percent}%`;
-  progressText.textContent = `${stage} (${current}/${total})`;
+  
+  let progressMsg = `${stage} (${current}/${total})`;
+  
+  // Add download stats if available
+  if (downloadStats) {
+    const { downloadedMB, totalMB, speedMBps } = downloadStats;
+    if (totalMB !== '?') {
+      progressMsg += ` - ${downloadedMB}/${totalMB} MB @ ${speedMBps} MB/s`;
+    } else {
+      progressMsg += ` - ${downloadedMB} MB @ ${speedMBps} MB/s`;
+    }
+  }
+  
+  progressText.textContent = progressMsg;
 }
 
 function setActiveTab(tab) {
@@ -240,6 +266,25 @@ function renderInstalledResourcepacks(resourcepacks = []) {
   });
 }
 
+function renderInstalledShaders(shaders = []) {
+  installedShadersList.innerHTML = '';
+  if (!shaders.length) {
+    installedShadersList.innerHTML = '<div class="resourcepacks-info">No installed shaders.</div>';
+    return;
+  }
+
+  shaders.forEach((pack) => {
+    const item = document.createElement('div');
+    item.className = 'installed-resourcepack-item';
+    item.innerHTML = `
+      <img src="${pack.iconUrl || ''}" alt="${pack.title}" />
+      <div>${pack.title}</div>
+      <button data-installed-id="${pack.projectId}">Delete</button>
+    `;
+    installedShadersList.appendChild(item);
+  });
+}
+
 async function loadInstalledMods() {
   if (!currentVersionInfo?.isModded) {
     installedMods = [];
@@ -266,6 +311,95 @@ async function loadInstalledResourcepacks() {
     log(`Failed to load installed resource packs: ${error.message}`);
   }
 }
+
+async function loadInstalledShaders() {
+  if (!currentVersionInfo?.id) {
+    renderInstalledShaders([]);
+    return;
+  }
+  try {
+    const packs = await window.minecraftLauncher.listInstalledShaders(currentVersionInfo.id);
+    renderInstalledShaders(packs || []);
+  } catch (error) {
+    log(`Failed to load installed shaders: ${error.message}`);
+  }
+}
+
+async function loadInstalledVersionsList() {
+  if (!installedVersionsSelect) return;
+  installedVersionsSelect.innerHTML = '';
+  try {
+    const versions = await window.minecraftLauncher.fetchInstalledVersions();
+    if (!versions || !versions.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No installed versions';
+      installedVersionsSelect.appendChild(opt);
+      installedVersionsSelect.disabled = true;
+      return;
+    }
+
+    installedVersionsSelect.disabled = false;
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '-- Select version --';
+    installedVersionsSelect.appendChild(placeholder);
+
+    versions.forEach((ver) => {
+      const opt = document.createElement('option');
+      opt.value = ver;
+      opt.textContent = ver;
+      installedVersionsSelect.appendChild(opt);
+    });
+  } catch (error) {
+    log(`Failed to fetch installed versions: ${error.message}`);
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = `Error: ${error.message}`;
+    installedVersionsSelect.appendChild(opt);
+    installedVersionsSelect.disabled = true;
+  }
+}
+
+fixVersionBtn?.addEventListener('click', async () => {
+  const versionId = installedVersionsSelect?.value;
+  if (!versionId) return log('Select a version to fix');
+  fixVersionBtn.disabled = true;
+  log(`Repairing ${versionId}...`);
+  try {
+    await window.minecraftLauncher.fixVersion(versionId);
+    log(`Repair complete: ${versionId}`);
+  } catch (err) {
+    log(`Failed to repair ${versionId}: ${err.message}`);
+  } finally {
+    fixVersionBtn.disabled = false;
+  }
+});
+
+deleteVersionBtn?.addEventListener('click', async () => {
+  const versionId = installedVersionsSelect?.value;
+  if (!versionId) return log('Select a version to delete');
+  if (!confirm(`Delete version ${versionId}? This will remove its folder.`)) return;
+  deleteVersionBtn.disabled = true;
+  try {
+    const res = await window.minecraftLauncher.deleteVersion(versionId);
+    if (res?.deleted) {
+      log(`Deleted version: ${versionId}`);
+      await loadVersions();
+      await loadInstalledVersionsList();
+    } else {
+      log(`Nothing deleted for ${versionId}`);
+    }
+  } catch (err) {
+    log(`Failed to delete ${versionId}: ${err.message}`);
+  } finally {
+    deleteVersionBtn.disabled = false;
+  }
+});
+
+refreshInstalledVersionsBtn?.addEventListener('click', async () => {
+  await loadInstalledVersionsList();
+});
 
 async function fetchMods(query = '', offset = 0) {
   if (!currentVersionInfo?.isModded) return;
@@ -362,6 +496,47 @@ async function fetchResourcepacks(query = '', offset = 0) {
   }
 }
 
+async function fetchShaders(query = '', offset = 0) {
+  // Determine mcVersion and loader. Fall back to the selected version if currentVersionInfo is not ready.
+  const selectedVersionFallback = versionSelect.value || window.localStorage.getItem(VERSION_STORAGE_KEY) || null;
+  const mcVersion = currentVersionInfo?.baseVersion || currentVersionInfo?.id || selectedVersionFallback;
+  // Always use no loader filter for shaders (Modrinth "any" behavior)
+  const loader = null;
+
+  if (!mcVersion) {
+    log('No version selected for shader search. Select a version and try again.');
+    return null;
+  }
+
+  log(`Searching shaders for Minecraft ${mcVersion} (loader: any)`);
+
+  try {
+    const response = await window.minecraftLauncher.searchModrinthShaders({
+      query,
+      mcVersion,
+      loader,
+      offset,
+      limit: 25
+    });
+    return response;
+  } catch (error) {
+    // If Modrinth is having issues, show friendly retry message
+    if (error && error.message && /502|503/.test(error.message)) {
+      log('Service unavailable, retrying...');
+      try {
+        await new Promise((res) => setTimeout(res, 1000));
+        const retryResponse = await window.minecraftLauncher.searchModrinthShaders({ query, mcVersion, loader: null, offset, limit: 25 });
+        return retryResponse;
+      } catch (e) {
+        log(`Failed to fetch shaders: ${e.message}`);
+        return null;
+      }
+    }
+    log(`Failed to fetch shaders: ${error.message}`);
+    return null;
+  }
+}
+
 async function loadInitialResourcepacks() {
   currentResourcepacksOffset = 0;
   currentResourcepacksQuery = '';
@@ -372,6 +547,48 @@ async function loadInitialResourcepacks() {
     hasMoreResourcepacks = (response.hits || []).length >= 25;
     loadMoreResourcepacksButton.classList.toggle('hidden', !hasMoreResourcepacks);
   }
+}
+
+async function loadInitialShaders() {
+  currentShadersOffset = 0;
+  currentShadersQuery = '';
+  log('Loading popular shaders...');
+  const response = await fetchShaders('', 0);
+  if (response) {
+    renderShadersList(response.hits || [], false);
+    hasMoreShaders = (response.hits || []).length >= 25;
+    loadMoreShadersButton.classList.toggle('hidden', !hasMoreShaders);
+  }
+}
+
+function renderShadersList(shaders = [], append = false) {
+  if (!append) shadersList.innerHTML = '';
+  if (!shaders.length && !append) {
+    shadersList.innerHTML = '<div class="resourcepacks-info"><p>No shaders found.</p></div>';
+    loadMoreShadersButton.classList.add('hidden');
+    return;
+  }
+
+  const installedSet = new Set(Array.from(installedShadersList.querySelectorAll('[data-installed-id]')).map(el => el.dataset.installedId));
+
+  shaders.forEach((s) => {
+    const item = document.createElement('div');
+    item.className = 'resourcepack-item';
+    const isInstalled = installedSet.has(s.project_id);
+    item.innerHTML = `
+      <img class="resourcepack-icon" src="${s.icon_url || ''}" alt="${s.title}" />
+      <div class="resourcepack-meta">
+        <h3>${s.title}</h3>
+        <p>${s.description || ''}</p>
+      </div>
+      <div class="mod-actions">
+        <button data-project-id="${s.project_id}" data-title="${s.title}" data-icon-url="${s.icon_url || ''}" ${isInstalled ? 'class="secondary" disabled' : ''}>
+          ${isInstalled ? 'Installed' : 'Install'}
+        </button>
+      </div>
+    `;
+    shadersList.appendChild(item);
+  });
 }
 
 async function refreshVersionInfo() {
@@ -438,7 +655,7 @@ async function loadModdedVersions() {
 window.minecraftLauncher.onLog(log);
 window.minecraftLauncher.onProgress((data) => {
   if (!data) return;
-  setProgress(data.stage, data.current, data.total);
+  setProgress(data.stage, data.current, data.total, data.downloadStats);
 });
 
 const savedUsername = window.localStorage.getItem(USERNAME_STORAGE_KEY);
@@ -561,14 +778,10 @@ playButton.addEventListener('click', async () => {
 
   try {
     playButton.textContent = 'Stop';
-    log(`Preparing ${version}...`);
-    if (!currentVersionInfo?.isModded) {
-      await window.minecraftLauncher.downloadVersion(version);
-    }
-    log('Launching game...');
+    log(`Starting ${version} (skip preparation)...`);
     const javaPath = javaSelect.value || '';
     const memoryGb = Number(memoryLimitInput?.value || 4);
-    await window.minecraftLauncher.launchGame({ version, username, javaPath, memoryGb });
+    await window.minecraftLauncher.launchGame({ version, username, javaPath, memoryGb, skipPreparation: true });
     playButton.textContent = 'Play';
   } catch (error) {
     log(`Error: ${error.message}`);
@@ -582,6 +795,12 @@ tabButtons.forEach((button) => {
     if (button.dataset.tab === 'resourcepacks') {
       loadInitialResourcepacks();
       loadInstalledResourcepacks();
+    }
+    if (button.dataset.tab === 'shaders') {
+      (async () => { await loadInstalledShaders(); await loadInitialShaders(); })();
+    }
+    if (button.dataset.tab === 'config') {
+      (async () => { await loadInstalledVersionsList(); })();
     }
   });
 });
@@ -607,7 +826,13 @@ versionSelect.addEventListener('change', () => {
   if (versionSelect.value) {
     window.localStorage.setItem(VERSION_STORAGE_KEY, versionSelect.value);
   }
-  refreshVersionInfo();
+  (async () => {
+    await refreshVersionInfo();
+    await loadInstalledShaders();
+    if (activeTab === 'shaders') {
+      await loadInitialShaders();
+    }
+  })();
 });
 
 moddedVersionSettingsButton.addEventListener('click', () => {
@@ -745,6 +970,30 @@ resourcepackSearchButton.addEventListener('click', async () => {
   }
 });
 
+shaderSearchButton.addEventListener('click', async () => {
+  const query = shaderSearchInput.value.trim();
+  currentShadersQuery = query;
+  currentShadersOffset = 0;
+  log(`Searching shaders: "${query || 'all'}"...`);
+  const response = await fetchShaders(query, 0);
+  if (response) {
+    renderShadersList(response.hits || [], false);
+    hasMoreShaders = (response.hits || []).length >= 25;
+    loadMoreShadersButton.classList.toggle('hidden', !hasMoreShaders);
+  }
+});
+
+loadMoreShadersButton.addEventListener('click', async () => {
+  currentShadersOffset += 25;
+  log(`Loading more shaders (offset ${currentShadersOffset})...`);
+  const response = await fetchShaders(currentShadersQuery, currentShadersOffset);
+  if (response) {
+    renderShadersList(response.hits || [], true);
+    hasMoreShaders = (response.hits || []).length >= 25;
+    loadMoreShadersButton.classList.toggle('hidden', !hasMoreShaders);
+  }
+});
+
 loadMoreResourcepacksButton.addEventListener('click', async () => {
   currentResourcepacksOffset += 25;
   log(`Loading more resource packs (offset ${currentResourcepacksOffset})...`);
@@ -789,6 +1038,67 @@ modsList.addEventListener('click', async (event) => {
     log(`Failed to install mod: ${error.message}`);
     button.disabled = false;
     button.textContent = 'Install';
+  }
+});
+
+shadersList.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-project-id]');
+  if (!button || button.disabled) return;
+  if (!currentVersionInfo?.id) {
+    log('Select a version first.');
+    return;
+  }
+  const projectId = button.dataset.projectId;
+  const title = button.dataset.title || button.closest('.resourcepack-item')?.querySelector('h3')?.textContent || projectId;
+  const author = button.dataset.author || '';
+  const iconUrl = button.dataset.iconUrl || button.closest('.resourcepack-item')?.querySelector('img')?.getAttribute('src') || '';
+  const baseVersion = currentVersionInfo.baseVersion || currentVersionInfo.id;
+
+  try {
+    button.disabled = true;
+    button.textContent = 'Installing...';
+
+    await window.minecraftLauncher.installShader({
+      projectId,
+      mcVersion: baseVersion,
+      profileName: currentVersionInfo.id,
+      title,
+      iconUrl,
+      author,
+      loader: currentVersionInfo.loader
+    });
+
+    button.textContent = 'Installed';
+    button.classList.add('secondary');
+    await loadInstalledShaders();
+  } catch (error) {
+    log(`Failed to install shader: ${error.message}`);
+    button.disabled = false;
+    button.textContent = 'Install';
+  }
+});
+
+installedShadersList.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-installed-id]');
+  if (!button || !currentVersionInfo?.id) return;
+  const projectId = button.dataset.installedId;
+  try {
+    button.disabled = true;
+    button.textContent = 'Deleting...';
+
+    await window.minecraftLauncher.removeShader({
+      projectId,
+      profileName: currentVersionInfo.id
+    });
+    await loadInstalledShaders();
+    // Re-render the shaders list to update button states
+    await fetchShaders(currentShadersQuery, currentShadersOffset).then((resp) => {
+      if (resp) renderShadersList(resp.hits || [], false);
+    }).catch(() => {});
+  } catch (error) {
+    log(`Failed to remove shader: ${error.message}`);
+    button.disabled = false;
+    button.textContent = 'Delete';
   }
 });
 

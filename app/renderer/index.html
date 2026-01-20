@@ -11,6 +11,7 @@
       <button class="tab-button active" data-tab="play">Play</button>
       <button class="tab-button" data-tab="mods">Mods</button>
       <button class="tab-button" data-tab="resourcepacks">Resource Packs</button>
+      <button class="tab-button" data-tab="shaders">Shaders</button>
       <button class="tab-button" data-tab="config">Config</button>
     </div>
     <div class="container">
@@ -75,6 +76,29 @@
         </div>
       </div>
 
+      <div class="tab-content" id="tab-shaders">
+        <div class="resourcepacks-info">
+          <p>Browse and install shaders for your Minecraft versions (Modrinth).</p>
+        </div>
+
+        <div class="resourcepacks-search">
+          <input id="shader-search" type="text" placeholder="Search shaders..." />
+          <button id="shader-search-btn">Search</button>
+        </div>
+
+        <div class="resourcepacks-layout">
+          <div class="resourcepacks-main">
+            <div id="shaders-list" class="resourcepacks-list"></div>
+            <button id="load-more-shaders" class="load-more-btn hidden">Load More</button>
+          </div>
+
+          <div class="resourcepacks-sidebar">
+            <h3>Installed Shaders</h3>
+            <div id="installed-shaders" class="installed-resourcepacks"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="tab-content" id="tab-config">
         <div class="form">
           <label for="java">Java Runtime</label>
@@ -100,6 +124,18 @@
             <div class="range-control">
               <input type="range" id="memory-limit" min="2" max="16" step="1" />
               <span id="memory-limit-value">4 GB</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <div class="config-title">Version Management</div>
+          <div class="version-management">
+            <div class="version-management-actions">
+              <select id="installed-versions-select"></select>
+              <button id="fix-version-btn">Fix</button>
+              <button id="delete-version-btn" class="secondary">Delete</button>
+              <button id="refresh-installed-versions">Refresh</button>
             </div>
           </div>
         </div>

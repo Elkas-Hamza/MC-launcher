@@ -17,8 +17,9 @@ let mainWindow;
 let cachedManifest = null;
 let isPreparingGame = false;
 let cancelPreparation = false;
+let currentDownloadStats = null;
 
-const minecraftDir = path.join(app.getPath('userData'), '.minecraft');
+const minecraftDir = path.join(app.getPath('appData'), '.minecraft');
 const versionsDir = path.join(minecraftDir, 'versions');
 const librariesDir = path.join(minecraftDir, 'libraries');
 const assetsDir = path.join(minecraftDir, 'assets');
@@ -27,6 +28,7 @@ const assetsObjectsDir = path.join(assetsDir, 'objects');
 const nativesBaseDir = path.join(minecraftDir, 'natives');
 const MODS_METADATA_FILE = '.launcher-mods.json';
 const RESOURCEPACKS_METADATA_FILE = '.launcher-resourcepacks.json';
+const SHADERPACKS_METADATA_FILE = '.launcher-shaderpacks.json';
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -62,9 +64,9 @@ function log(message) {
   }
 }
 
-function reportProgress(stage, current, total) {
+function reportProgress(stage, current, total, downloadStats = null) {
   if (mainWindow) {
-    mainWindow.webContents.send('progress', { stage, current, total });
+    mainWindow.webContents.send('progress', { stage, current, total, downloadStats });
   }
 }
 
@@ -401,6 +403,59 @@ function saveResourcepacksMetadata(profileName, metadata) {
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
 }
 
+function getShaderpacksDir(profileName) {
+  return getVersionPaths(profileName).shaderpacksDir;
+}
+
+function loadShaderpacksMetadata(profileName) {
+  const shaderpacksDir = getShaderpacksDir(profileName);
+  const metadataPath = path.join(shaderpacksDir, SHADERPACKS_METADATA_FILE);
+  if (!fs.existsSync(metadataPath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(metadataPath, 'utf-8')) || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveShaderpacksMetadata(profileName, metadata) {
+  const shaderpacksDir = getShaderpacksDir(profileName);
+  ensureDir(shaderpacksDir);
+  const metadataPath = path.join(shaderpacksDir, SHADERPACKS_METADATA_FILE);
+  fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+}
+
+function listInstalledShaderpacks(profileName) {
+  const shaderpacksDir = getShaderpacksDir(profileName);
+  ensureDir(shaderpacksDir);
+  const metadata = loadShaderpacksMetadata(profileName);
+  const result = [];
+  let changed = false;
+
+  Object.entries(metadata).forEach(([projectId, info]) => {
+    if (!info?.file) return;
+    const filePath = path.join(shaderpacksDir, info.file);
+    if (!fs.existsSync(filePath)) {
+      delete metadata[projectId];
+      changed = true;
+      return;
+    }
+    result.push({
+      projectId,
+      title: info.title,
+      iconUrl: info.iconUrl,
+      author: info.author,
+      file: info.file
+    });
+  });
+
+  if (changed) {
+    saveShaderpacksMetadata(profileName, metadata);
+  }
+
+  return result;
+}
+
 function listInstalledResourcepacks(profileName) {
   const resourcepacksDir = getResourcepacksDir(profileName);
   ensureDir(resourcepacksDir);
@@ -479,6 +534,42 @@ function downloadFile(url, destination, options = {}) {
         fs.unlinkSync(destination);
         return reject(new Error(`Failed to download ${url} (${res.statusCode})`));
       }
+      
+      // Track download progress
+      let downloadedBytes = 0;
+      const totalBytes = parseInt(res.headers['content-length'], 10) || 0;
+      const startTime = Date.now();
+      let lastUpdate = startTime;
+      let lastDownloadedBytes = 0;
+      
+      res.on('data', (chunk) => {
+        downloadedBytes += chunk.length;
+        const now = Date.now();
+        const timeDiff = (now - lastUpdate) / 1000; // seconds
+        
+        // Update speed every 500ms
+        if (timeDiff >= 0.5) {
+          const bytesDiff = downloadedBytes - lastDownloadedBytes;
+          const speed = bytesDiff / timeDiff; // bytes per second
+          const downloadedMB = (downloadedBytes / (1024 * 1024)).toFixed(2);
+          const totalMB = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(2) : '?';
+          const speedMBps = (speed / (1024 * 1024)).toFixed(2);
+          
+          if (options.onProgress) {
+            options.onProgress({
+              downloadedMB,
+              totalMB,
+              speedMBps,
+              downloadedBytes,
+              totalBytes
+            });
+          }
+          
+          lastUpdate = now;
+          lastDownloadedBytes = downloadedBytes;
+        }
+      });
+      
       res.pipe(fileStream);
       fileStream.on('finish', async () => {
         fileStream.close(async () => {
@@ -687,7 +778,15 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
     if (cancelPreparation) {
       throw new Error('Download cancelled');
     }
-    await downloadFile(item.url, item.path, { expectedSha1: item.sha1, expectedSize: item.size });
+    await downloadFile(item.url, item.path, { 
+      expectedSha1: item.sha1, 
+      expectedSize: item.size,
+      onProgress: (stats) => {
+        currentDownloadStats = stats;
+        reportProgress('Downloading libraries', completed, total, stats);
+      }
+    });
+    currentDownloadStats = null;
     completed += 1;
     reportProgress('Downloading libraries', completed, total);
   }
@@ -697,7 +796,15 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
     if (cancelPreparation) {
       throw new Error('Download cancelled');
     }
-    await downloadFile(item.url, item.path, { expectedSha1: item.sha1, expectedSize: item.size });
+    await downloadFile(item.url, item.path, { 
+      expectedSha1: item.sha1, 
+      expectedSize: item.size,
+      onProgress: (stats) => {
+        currentDownloadStats = stats;
+        reportProgress('Downloading libraries', completed, total, stats);
+      }
+    });
+    currentDownloadStats = null;
     const exclude = item.extract?.exclude || [];
     await extractNativeJar(item.path, targetNativesDir, exclude);
     completed += 1;
@@ -740,7 +847,15 @@ async function downloadAssets(assetIndex) {
       const subDir = hash.substring(0, 2);
       const objectPath = path.join(assetsObjectsDir, subDir, hash);
       const url = `https://resources.download.minecraft.net/${subDir}/${hash}`;
-      await downloadFile(url, objectPath, { expectedSha1: hash, expectedSize: object.size });
+      await downloadFile(url, objectPath, { 
+        expectedSha1: hash, 
+        expectedSize: object.size,
+        onProgress: (stats) => {
+          currentDownloadStats = stats;
+          reportProgress('Downloading assets', completed, total, stats);
+        }
+      });
+      currentDownloadStats = null;
       completed += 1;
       reportProgress('Downloading assets', completed, total);
     }
@@ -1220,8 +1335,13 @@ async function downloadVersionInternal(versionId) {
   reportProgress('Downloading client', 0, 1);
   await downloadFile(clientJar.url, clientJarPath, {
     expectedSha1: clientJar.sha1,
-    expectedSize: clientJar.size
+    expectedSize: clientJar.size,
+    onProgress: (stats) => {
+      currentDownloadStats = stats;
+      reportProgress('Downloading client', 0, 1, stats);
+    }
   });
+  currentDownloadStats = null;
   reportProgress('Downloading client', 1, 1);
 
   log('Downloading libraries...');
@@ -1524,6 +1644,32 @@ async function searchModrinthMods({ query, mcVersion, loader, offset = 0, limit 
   return fetchJson(url);
 }
 
+async function searchModrinthShaders({ query, mcVersion, loader, offset = 0, limit = 25 }) {
+  const facets = [
+    ['project_type:shader'],
+    [`versions:${mcVersion}`]
+  ];
+
+  const url = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query || '')}&limit=${limit}&offset=${offset}&index=relevance&facets=${encodeURIComponent(JSON.stringify(facets))}`;
+
+  // Retry on 502/503 a few times
+  const attempts = 3;
+  let delay = 300;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetchJson(url);
+    } catch (err) {
+      if (i === attempts - 1) throw err;
+      if (err && err.message && /502|503/.test(err.message)) {
+        await new Promise((res) => setTimeout(res, delay));
+        delay *= 2;
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function installModrinthMod({ projectId, mcVersion, loader, profileName, title, iconUrl, author }) {
   const versionsUrl = `https://api.modrinth.com/v2/project/${projectId}/version?loaders=${encodeURIComponent(JSON.stringify([loader]))}&game_versions=${encodeURIComponent(JSON.stringify([mcVersion]))}`;
   const versions = await fetchJson(versionsUrl);
@@ -1544,8 +1690,13 @@ async function installModrinthMod({ projectId, mcVersion, loader, profileName, t
   log(`Installing mod: ${title || version.name || projectId}...`);
   await downloadFile(file.url, destination, {
     expectedSha1: file.hashes?.sha1 || null,
-    expectedSize: file.size || null
+    expectedSize: file.size || null,
+    onProgress: (stats) => {
+      currentDownloadStats = stats;
+      reportProgress(`Installing ${title || version.name || projectId}`, 0, 1, stats);
+    }
   });
+  currentDownloadStats = null;
   const metadata = loadModsMetadata(profileName);
   metadata[projectId] = {
     title: title || version.name || projectId,
@@ -1578,8 +1729,13 @@ async function installModrinthResourcepack({ projectId, mcVersion, profileName, 
   log(`Installing resource pack: ${title || version.name || projectId}...`);
   await downloadFile(file.url, destination, {
     expectedSha1: file.hashes?.sha1 || null,
-    expectedSize: file.size || null
+    expectedSize: file.size || null,
+    onProgress: (stats) => {
+      currentDownloadStats = stats;
+      reportProgress(`Installing ${title || version.name || projectId}`, 0, 1, stats);
+    }
   });
+  currentDownloadStats = null;
   const metadata = loadResourcepacksMetadata(profileName);
   metadata[projectId] = {
     title: title || version.name || projectId,
@@ -1592,6 +1748,62 @@ async function installModrinthResourcepack({ projectId, mcVersion, profileName, 
   return { file: destination };
 }
 
+async function installModrinthShader({ projectId, mcVersion, profileName, title, iconUrl, author }) {
+  // Query versions for the project that match the mcVersion (do not filter by loader)
+  const versionsUrl = `https://api.modrinth.com/v2/project/${projectId}/version?game_versions=${encodeURIComponent(JSON.stringify([mcVersion]))}`;
+  const versions = await fetchJson(versionsUrl);
+  if (!versions || versions.length === 0) {
+    throw new Error('No compatible shader version found');
+  }
+
+  const version = versions[0];
+  const file = version.files?.[0];
+  if (!file?.url) {
+    throw new Error('No downloadable file found for shader');
+  }
+
+  const shaderpacksDir = getShaderpacksDir(profileName);
+  ensureDir(shaderpacksDir);
+
+  const destination = path.join(shaderpacksDir, file.filename);
+  log(`Installing shader: ${title || version.name || projectId}...`);
+
+  // Attempt download with a small number of retries on network errors
+  const attempts = 2;
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await downloadFile(file.url, destination, {
+        expectedSha1: file.hashes?.sha1 || null,
+        expectedSize: file.size || null,
+        onProgress: (stats) => {
+          currentDownloadStats = stats;
+          reportProgress(`Installing ${title || version.name || projectId}`, 0, 1, stats);
+        }
+      });
+      currentDownloadStats = null;
+      lastErr = null;
+      break;
+    } catch (err) {
+      lastErr = err;
+      // If HTTP 502/503 or network issues, retry once
+      if (i === attempts - 1) throw err;
+      await new Promise((res) => setTimeout(res, 500));
+    }
+  }
+
+  const metadata = loadShaderpacksMetadata(profileName);
+  metadata[projectId] = {
+    title: title || version.name || projectId,
+    iconUrl: iconUrl || null,
+    author: author || null,
+    file: file.filename
+  };
+  saveShaderpacksMetadata(profileName, metadata);
+  log(`Installed shader: ${title || version.name || projectId}`);
+  return { file: destination };
+}
+
 ipcMain.handle('fetch-versions', async () => {
   const manifest = await getManifest();
   return manifest.versions.filter((version) => version.type === 'release');
@@ -1599,6 +1811,45 @@ ipcMain.handle('fetch-versions', async () => {
 
 ipcMain.handle('fetch-installed-versions', async () => {
   return listInstalledVersions();
+});
+
+ipcMain.handle('fix-version', async (_event, versionId) => {
+  if (!versionId) throw new Error('Missing versionId');
+
+  const versionJson = loadVersionJson(versionId);
+  // If no local json, try to download the version manifest and files
+  if (!versionJson) {
+    await downloadVersionInternal(versionId);
+    return { fixed: true };
+  }
+
+  const meta = getLauncherMetadata(versionJson);
+  // If modded, ensure base version and build client.jar
+  if (meta?.modded) {
+    const base = meta.baseVersion || versionJson.inheritsFrom;
+    if (base) {
+      await ensureBaseVersionDownloaded(base);
+      const paths = ensureVersionRuntimeLayout(versionId, true);
+      const clientJarPath = path.join(paths.versionDir, 'client.jar');
+      await ensureClientJarFromBase({ baseVersion: base, targetPath: clientJarPath, installerPath: null });
+    }
+  } else {
+    // For vanilla/custom non-modded, re-download missing pieces
+    await downloadVersionInternal(versionId);
+  }
+
+  return { fixed: true };
+});
+
+ipcMain.handle('delete-version', async (_event, versionId) => {
+  if (!versionId) throw new Error('Missing versionId');
+  const versionDir = path.join(versionsDir, versionId);
+  if (fs.existsSync(versionDir)) {
+    fs.rmSync(versionDir, { recursive: true, force: true });
+    log(`Deleted version: ${versionId}`);
+    return { deleted: true };
+  }
+  return { deleted: false };
 });
 
 ipcMain.handle('fetch-java', async () => {
@@ -1652,6 +1903,45 @@ ipcMain.handle('create-modded-version', async (_event, payload) => {
 ipcMain.handle('search-modrinth', async (_event, payload) => {
   const { query, mcVersion, loader, offset, limit } = payload;
   return searchModrinthMods({ query, mcVersion, loader, offset, limit });
+});
+
+ipcMain.handle('search-modrinth-shaders', async (_event, payload) => {
+  const { query, mcVersion, loader, offset, limit } = payload;
+  return searchModrinthShaders({ query, mcVersion, loader, offset, limit });
+});
+
+ipcMain.handle('install-shader', async (_event, payload) => {
+  return installModrinthShader(payload);
+});
+
+ipcMain.handle('list-installed-shaders', async (_event, profileName) => {
+  if (!profileName) return [];
+  return listInstalledShaderpacks(profileName);
+});
+
+ipcMain.handle('remove-shader', async (_event, payload) => {
+  const { projectId, profileName } = payload || {};
+  if (!projectId || !profileName) {
+    throw new Error('Missing required fields for remove-shader');
+  }
+
+  const shaderpacksDir = getShaderpacksDir(profileName);
+  const metadata = loadShaderpacksMetadata(profileName);
+  const info = metadata[projectId];
+  if (!info?.file) {
+    throw new Error('Shader not found for removal');
+  }
+
+  const filePath = path.join(shaderpacksDir, info.file);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+
+  delete metadata[projectId];
+  saveShaderpacksMetadata(profileName, metadata);
+
+  log(`Removed shader: ${info.title || projectId}`);
+  return true;
 });
 
 ipcMain.handle('install-mod', async (_event, payload) => {
@@ -1736,6 +2026,7 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   const username = payload.username || 'Player';
   const javaPathOverride = payload.javaPath;
   const memoryGb = Number(payload.memoryGb || 0);
+  const skipPreparation = payload.skipPreparation !== undefined ? Boolean(payload.skipPreparation) : true;
 
   isPreparingGame = true;
   cancelPreparation = false;
@@ -1776,18 +2067,22 @@ ipcMain.handle('launch-game', async (_event, payload) => {
     throw new Error('Preparation cancelled');
   }
 
-  if (Array.isArray(resolved.libraries) && resolved.libraries.length > 0) {
+  if (!skipPreparation && Array.isArray(resolved.libraries) && resolved.libraries.length > 0) {
     log('Ensuring libraries...');
     await downloadLibraries(resolved.libraries, versionId, librariesDir, paths.nativesDir);
+  } else if (skipPreparation && Array.isArray(resolved.libraries) && resolved.libraries.length > 0) {
+    log('skipPreparation: skipping library downloads.');
   }
 
   if (cancelPreparation) {
     throw new Error('Preparation cancelled');
   }
 
-  if (resolved.assetIndex?.url) {
+  if (!skipPreparation && resolved.assetIndex?.url) {
     log('Ensuring assets...');
     await downloadAssets(resolved.assetIndex);
+  } else if (skipPreparation && resolved.assetIndex?.url) {
+    log('skipPreparation: skipping asset downloads.');
   }
 
   if (cancelPreparation) {
@@ -1897,7 +2192,7 @@ ipcMain.handle('launch-game', async (_event, payload) => {
       throw new Error('Forge base version is missing. Cannot resolve Minecraft client JAR.');
     }
     const forgeVersion = meta?.forgeVersion || extractForgeVersionFromLibraries(versionJson.libraries);
-    const installerPath = forgeVersion
+    const installerPath = (!skipPreparation && forgeVersion)
       ? await ensureForgeInstaller({ loaderType: meta.loader, forgeVersion })
       : null;
     await ensureClientJarFromBase({ baseVersion, targetPath: clientJarPath, installerPath });
