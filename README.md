@@ -1,6 +1,6 @@
 # MC-launcher
 
-[![Status](https://img.shields.io/badge/status-alpha-orange)](https://github.com/Elkas-Hamza/MC-launcher)
+[![Version](https://img.shields.io/badge/version-v1-blue)](https://github.com/Elkas-Hamza/MC-launcher)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A lightweight, user-friendly free Minecraft launcher to manage installations, versions, mods, and player profiles. MC-launcher aims to provide a fast, reliable, and extensible launcher experience for single-player and modded Minecraft.
