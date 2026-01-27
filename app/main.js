@@ -30,6 +30,38 @@ const MODS_METADATA_FILE = '.launcher-mods.json';
 const RESOURCEPACKS_METADATA_FILE = '.launcher-resourcepacks.json';
 const SHADERPACKS_METADATA_FILE = '.launcher-shaderpacks.json';
 
+// Validate critical paths on startup
+function validatePathConstants() {
+  const validations = [
+    { name: 'minecraftDir', path: minecraftDir, mustEndWith: '.minecraft' },
+    { name: 'versionsDir', path: versionsDir, mustContain: ['.minecraft', 'versions'] },
+    { name: 'assetsDir', path: assetsDir, mustContain: ['.minecraft', 'assets'] },
+    { name: 'assetsObjectsDir', path: assetsObjectsDir, mustContain: ['.minecraft', 'assets', 'objects'] },
+  ];
+  
+  for (const { name, path: p, mustEndWith, mustContain } of validations) {
+    if (mustEndWith && !p.endsWith(mustEndWith)) {
+      throw new Error(`PATH VALIDATION FAILED: ${name} must end with '${mustEndWith}' but is: ${p}`);
+    }
+    if (mustContain) {
+      for (const segment of mustContain) {
+        if (!p.includes(segment)) {
+          throw new Error(`PATH VALIDATION FAILED: ${name} must contain '${segment}' but is: ${p}`);
+        }
+      }
+    }
+  }
+  
+
+}
+
+try {
+  validatePathConstants();
+} catch (error) {
+  console.error('FATAL PATH ERROR:', error.message);
+  process.exit(1);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 900,
@@ -197,12 +229,14 @@ async function listAllVersionsSorted() {
     const baseRelease = baseVersion ? releaseMap.get(baseVersion) : null;
     combined.push({
       id: versionId,
-      type: 'custom',
+      type: meta?.isModpack ? 'modpack' : 'custom',
       releaseTime: baseRelease?.releaseTime || null,
       isInstalled: true,
       isCustom: true,
+      isModpack: meta?.isModpack || false,
       baseVersion,
-      loader: meta?.loader || null
+      loader: meta?.loader || null,
+      modpackName: meta?.modpackName || null
     });
   });
 
@@ -220,6 +254,23 @@ function loadVersionJson(versionId) {
   const versionJsonPath = path.join(versionsDir, versionId, `${versionId}.json`);
   if (!fs.existsSync(versionJsonPath)) return null;
   return JSON.parse(fs.readFileSync(versionJsonPath, 'utf-8'));
+}
+
+function resolveJarPath(jarId, versionDir) {
+  // Try <id>.jar first
+  const idJarPath = path.join(versionDir, jarId, `${jarId}.jar`);
+  if (fs.existsSync(idJarPath)) {
+    return idJarPath;
+  }
+  
+  // Try client.jar in the same directory
+  const clientJarPath = path.join(versionDir, jarId, 'client.jar');
+  if (fs.existsSync(clientJarPath)) {
+    return clientJarPath;
+  }
+  
+  // Return null if neither exists (will be handled by caller)
+  return null;
 }
 
 function resolveVersionChain(versionId) {
@@ -264,12 +315,7 @@ function resolveVersionChain(versionId) {
     }
 
     const candidateJarId = json.jar || id;
-    const candidateJarPath = path.join(versionsDir, candidateJarId, `${candidateJarId}.jar`);
-    const jarExists = fs.existsSync(candidateJarPath);
-    
-    if (jarExists) {
-      jarIds.push(candidateJarId);
-    }
+    jarIds.push(candidateJarId);
   }
 
   return {
@@ -379,6 +425,115 @@ function listInstalledMods(profileName) {
   }
 
   return result;
+}
+
+async function scanModsFolder(profileName) {
+  const modsDir = getModsDir(profileName);
+  ensureDir(modsDir);
+  const metadata = loadModsMetadata(profileName);
+  
+  const files = fs.readdirSync(modsDir).filter(f => f.endsWith('.jar'));
+  let scanned = 0;
+  let added = 0;
+  
+  const AdmZip = require('adm-zip');
+  
+  for (const file of files) {
+    scanned++;
+    
+    // Skip if already in metadata
+    const alreadyExists = Object.values(metadata).some(mod => mod.file === file);
+    if (alreadyExists) continue;
+    
+    try {
+      const filePath = path.join(modsDir, file);
+      const zip = new AdmZip(filePath);
+      
+      let modInfo = null;
+      
+      // Try Fabric format (fabric.mod.json)
+      const fabricEntry = zip.getEntry('fabric.mod.json');
+      if (fabricEntry) {
+        const fabricJson = JSON.parse(zip.readAsText(fabricEntry));
+        modInfo = {
+          title: fabricJson.name || file.replace('.jar', ''),
+          author: Array.isArray(fabricJson.authors) 
+            ? fabricJson.authors[0]?.name || fabricJson.authors[0] || 'Unknown'
+            : fabricJson.authors || 'Unknown',
+          file: file,
+          iconUrl: '',
+          loader: 'fabric'
+        };
+      }
+      
+      // Try Forge format (mods.toml or mcmod.info)
+      if (!modInfo) {
+        const tomlEntry = zip.getEntry('META-INF/mods.toml');
+        if (tomlEntry) {
+          const tomlText = zip.readAsText(tomlEntry);
+          const displayNameMatch = tomlText.match(/displayName\s*=\s*["']([^"']+)["']/);
+          const authorsMatch = tomlText.match(/authors\s*=\s*["']([^"']+)["']/);
+          
+          modInfo = {
+            title: displayNameMatch ? displayNameMatch[1] : file.replace('.jar', ''),
+            author: authorsMatch ? authorsMatch[1] : 'Unknown',
+            file: file,
+            iconUrl: '',
+            loader: 'forge'
+          };
+        }
+      }
+      
+      // Try old Forge format (mcmod.info)
+      if (!modInfo) {
+        const mcmodEntry = zip.getEntry('mcmod.info');
+        if (mcmodEntry) {
+          try {
+            const mcmodJson = JSON.parse(zip.readAsText(mcmodEntry));
+            const modList = Array.isArray(mcmodJson) ? mcmodJson : mcmodJson.modList || [];
+            if (modList.length > 0) {
+              const mod = modList[0];
+              modInfo = {
+                title: mod.name || file.replace('.jar', ''),
+                author: Array.isArray(mod.authorList) ? mod.authorList.join(', ') : mod.authorList || 'Unknown',
+                file: file,
+                iconUrl: '',
+                loader: 'forge'
+              };
+            }
+          } catch (e) {
+            // Ignore malformed mcmod.info
+          }
+        }
+      }
+      
+      // Fallback: use filename
+      if (!modInfo) {
+        modInfo = {
+          title: file.replace('.jar', '').replace(/[-_]/g, ' '),
+          author: 'Unknown',
+          file: file,
+          iconUrl: '',
+          loader: 'unknown'
+        };
+      }
+      
+      // Use filename as pseudo project ID
+      const projectId = `local-${file.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`;
+      metadata[projectId] = modInfo;
+      added++;
+      
+    } catch (error) {
+      log(`Error scanning ${file}: ${error.message}`);
+    }
+  }
+  
+  if (added > 0) {
+    saveModsMetadata(profileName, metadata);
+    log(`Scanned ${scanned} mods, added ${added} to metadata`);
+  }
+  
+  return { scanned, added };
 }
 
 function getResourcepacksDir(profileName) {
@@ -498,15 +653,69 @@ function computeSha1(filePath) {
 }
 
 async function verifyFile(filePath, options = {}) {
-  if (!fs.existsSync(filePath)) return false;
-  const stats = fs.statSync(filePath);
-  if (options.expectedSize && stats.size !== options.expectedSize) {
-    return false;
-  }
-  if (options.expectedSha1) {
-    const sha1 = await computeSha1(filePath);
-    if (sha1.toLowerCase() !== options.expectedSha1.toLowerCase()) {
+  if (options.skipVerification) return true; // Skip verification if requested
+  
+  try {
+    if (!fs.existsSync(filePath)) return false;
+    const stats = fs.statSync(filePath);
+    if (options.expectedSize && stats.size !== options.expectedSize) {
       return false;
+    }
+    if (options.expectedSha1) {
+      const sha1 = await computeSha1(filePath);
+      if (sha1.toLowerCase() !== options.expectedSha1.toLowerCase()) {
+        return false;
+      }
+    }
+    return true;
+  } catch (error) {
+    // Permission error or file locked - throw so caller can handle
+    throw new Error(`Cannot access file for verification: ${error.message}`);
+  }
+}
+
+async function safeUnlink(filePath, retries = 3, delay = 100) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      return; // Success
+    } catch (error) {
+      if (error.code === 'EPERM' || error.code === 'EBUSY') {
+        if (i < retries - 1) {
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
+          continue;
+        }
+      }
+      // Last retry or non-permission error - log but don't throw
+      console.error(`Could not delete file ${filePath}: ${error.message}`);
+    }
+  }
+}
+
+function validateAssetPath(filePath) {
+  // Ensure asset files are in correct structure: .minecraft/assets/objects/XX/<hash>
+  if (filePath.includes(path.join('assets', 'objects'))) {
+    const parts = filePath.split(path.sep);
+    const objectsIndex = parts.lastIndexOf('objects');
+    if (objectsIndex === -1) {
+      throw new Error(`Invalid asset path (missing 'objects'): ${filePath}`);
+    }
+    if (objectsIndex + 2 >= parts.length) {
+      throw new Error(`Invalid asset path (missing subdirectory): ${filePath}`);
+    }
+    const subDir = parts[objectsIndex + 1];
+    const hash = parts[objectsIndex + 2];
+    if (!subDir || subDir.length !== 2) {
+      throw new Error(`Invalid asset path (subdirectory must be 2 chars): ${filePath}`);
+    }
+    if (!hash || hash.length < 20) {
+      throw new Error(`Invalid asset path (hash too short): ${filePath}`);
+    }
+    if (!hash.startsWith(subDir)) {
+      throw new Error(`Invalid asset path (hash '${hash}' doesn't start with subdir '${subDir}'): ${filePath}`);
     }
   }
   return true;
@@ -514,25 +723,145 @@ async function verifyFile(filePath, options = {}) {
 
 function downloadFile(url, destination, options = {}) {
   return new Promise(async (resolve, reject) => {
-    if (fs.existsSync(destination)) {
-      const ok = await verifyFile(destination, options);
-      if (ok) return resolve(false);
-      fs.unlinkSync(destination);
+    // Validate path structure for assets
+    try {
+      validateAssetPath(destination);
+    } catch (error) {
+      log(`PATH ERROR: ${error.message}`);
+      return reject(error);
     }
 
-    ensureDir(path.dirname(destination));
-    const fileStream = fs.createWriteStream(destination);
+    // Helper to safely check and verify existing file
+    const tryVerifyExisting = async () => {
+      try {
+        if (fs.existsSync(destination)) {
+          // If it's a directory, it's corrupted - remove it
+          const stats = fs.lstatSync(destination);
+          if (stats.isDirectory()) {
+            fs.rmSync(destination, { recursive: true, force: true });
+            return false;
+          }
+          
+          const ok = await verifyFile(destination, options);
+          if (ok) return true;
+          // File exists but invalid - try to delete with retry
+          await safeUnlink(destination);
+        }
+        return false;
+      } catch (error) {
+        // If we can't verify, assume we need to re-download
+        return false;
+      }
+    };
+
+    const verified = await tryVerifyExisting();
+    if (verified) return resolve(false);
+
+    // Use lock file to prevent race conditions in parallel downloads
+    const lockFile = `${destination}.lock`;
+    const tempFile = `${destination}.tmp`;
+    
+    // Ensure parent directory exists before creating lock file
+    const lockParentDir = path.dirname(lockFile);
+    if (!fs.existsSync(lockParentDir)) {
+      fs.mkdirSync(lockParentDir, { recursive: true });
+    }
+    
+    // Try to acquire lock
+    let lockAcquired = false;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      try {
+        // Create lock file atomically (fails if exists)
+        fs.writeFileSync(lockFile, process.pid.toString(), { flag: 'wx' });
+        lockAcquired = true;
+        break;
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          // Another worker has the lock, wait and retry
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          // Check if file was completed by other worker
+          const nowVerified = await tryVerifyExisting();
+          if (nowVerified) {
+            return resolve(false);
+          }
+          continue;
+        }
+        // Other error, abort
+        return reject(error);
+      }
+    }
+    
+    if (!lockAcquired) {
+      log(`LOCK TIMEOUT: Could not acquire lock for ${destination}`);
+      return reject(new Error(`Could not acquire download lock for ${destination}`));
+    }
+
+    // Log detailed path information
+    log(`DOWNLOAD PATH: ${destination}`);
+    log(`PARENT DIR: ${path.dirname(destination)}`);
+    
+    // Ensure parent directory exists ONCE with lock held
+    const parentDir = path.dirname(destination);
+    try {
+      ensureDir(parentDir);
+      
+      // Verify parent is actually a directory
+      const parentStats = fs.lstatSync(parentDir);
+      if (!parentStats.isDirectory()) {
+        fs.rmSync(parentDir, { force: true });
+        ensureDir(parentDir);
+      }
+    } catch (error) {
+      fs.unlinkSync(lockFile);
+      return reject(new Error(`Failed to create parent directory ${parentDir}: ${error.message}`));
+    }
+    
+    // Critical: Remove destination if it exists as directory
+    try {
+      if (fs.existsSync(destination)) {
+        const stats = fs.lstatSync(destination);
+        if (stats.isDirectory()) {
+          log(`REMOVING DIRECTORY at file path: ${destination}`);
+          fs.rmSync(destination, { recursive: true, force: true });
+        } else {
+          // File exists, remove it (we already checked verification)
+          fs.unlinkSync(destination);
+        }
+      }
+      
+      // Also check temp file
+      if (fs.existsSync(tempFile)) {
+        const tempStats = fs.lstatSync(tempFile);
+        if (tempStats.isDirectory()) {
+          log(`REMOVING DIRECTORY at temp path: ${tempFile}`);
+          fs.rmSync(tempFile, { recursive: true, force: true });
+        } else {
+          fs.unlinkSync(tempFile);
+        }
+      }
+    } catch (error) {
+      fs.unlinkSync(lockFile);
+      return reject(new Error(`Failed to clean destination: ${error.message}`));
+    }
+    
+    // Download to temporary file first (atomic write pattern)
+    const fileStream = fs.createWriteStream(tempFile);
 
     const request = https.get(url, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         fileStream.close();
-        fs.unlinkSync(destination);
-        return resolve(downloadFile(res.headers.location, destination));
+        safeUnlink(destination).then(() => {
+          resolve(downloadFile(res.headers.location, destination, options));
+        });
+        return;
       }
       if (res.statusCode !== 200) {
         fileStream.close();
-        fs.unlinkSync(destination);
-        return reject(new Error(`Failed to download ${url} (${res.statusCode})`));
+        safeUnlink(destination).then(() => {
+          reject(new Error(`Failed to download ${url} (${res.statusCode})`));
+        });
+        return;
       }
       
       // Track download progress
@@ -573,20 +902,53 @@ function downloadFile(url, destination, options = {}) {
       res.pipe(fileStream);
       fileStream.on('finish', async () => {
         fileStream.close(async () => {
-          const ok = await verifyFile(destination, options);
-          if (!ok) {
-            if (fs.existsSync(destination)) fs.unlinkSync(destination);
-            return reject(new Error(`Downloaded file failed verification: ${destination}`));
+          try {
+            // Verify temp file
+            const ok = await verifyFile(tempFile, options);
+            if (!ok) {
+              await safeUnlink(tempFile);
+              fs.unlinkSync(lockFile);
+              return reject(new Error(`Downloaded file failed verification: ${tempFile}`));
+            }
+            
+            // Atomic rename: temp -> final destination
+            try {
+              // Final check: ensure destination is not a directory
+              if (fs.existsSync(destination)) {
+                const finalStats = fs.lstatSync(destination);
+                if (finalStats.isDirectory()) {
+                  log(`RACE DETECTED: Directory appeared at ${destination}`);
+                  fs.rmSync(destination, { recursive: true, force: true });
+                }
+              }
+              
+              fs.renameSync(tempFile, destination);
+              log(`DOWNLOAD SUCCESS: ${destination}`);
+            } catch (renameError) {
+              await safeUnlink(tempFile);
+              fs.unlinkSync(lockFile);
+              return reject(new Error(`Failed to move temp file: ${renameError.message}`));
+            }
+            
+            // Release lock
+            fs.unlinkSync(lockFile);
+            resolve(true);
+          } catch (verifyError) {
+            // Permission or access error during verification
+            await safeUnlink(tempFile);
+            try { fs.unlinkSync(lockFile); } catch {}
+            return reject(new Error(`File verification error: ${verifyError.message}`));
           }
-          resolve(true);
         });
       });
     });
 
     request.on('error', (error) => {
       fileStream.close();
-      if (fs.existsSync(destination)) fs.unlinkSync(destination);
-      reject(error);
+      safeUnlink(tempFile).then(() => {
+        try { fs.unlinkSync(lockFile); } catch {}
+        reject(error);
+      });
     });
   });
 }
@@ -717,11 +1079,13 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
     if (artifact && artifact.path) {
       let artifactPath = artifact.path;
 
-      if (artifactPath.endsWith('-client.jar')) {
-        if (isForgeLikeLibrary(library.name)) {
-          continue;
-        }
-        artifactPath = artifactPath.replace('-client.jar', '.jar');
+      // Skip Forge-generated artifacts (SRG, extra, client jars)
+      // These are generated locally by Forge installer, NOT downloaded from Mojang
+      if (artifactPath.includes('-srg.jar') || 
+          artifactPath.includes('-extra.jar') || 
+          (artifactPath.endsWith('-client.jar') && isForgeLikeLibrary(library.name))) {
+        log(`Skipping Forge-generated artifact: ${artifactPath}`);
+        continue;
       }
 
       if (isForgeLikeLibrary(library.name)) {
@@ -747,6 +1111,14 @@ async function downloadLibraries(libraries, versionId, targetLibrariesDir, targe
     } else if (library.name) {
       const artifactPath = buildMavenArtifactPath(library.name);
       if (artifactPath) {
+        // Skip Forge-generated artifacts (SRG, extra, client jars)
+        if (artifactPath.includes('-srg.jar') || 
+            artifactPath.includes('-extra.jar') || 
+            (artifactPath.endsWith('-client.jar') && isForgeLikeLibrary(library.name))) {
+          log(`Skipping Forge-generated artifact: ${artifactPath}`);
+          continue;
+        }
+        
         const rawBaseUrl = (typeof library.url === 'string' && library.url.trim().length > 0)
           ? library.url.trim()
           : 'https://libraries.minecraft.net/';
@@ -845,7 +1217,28 @@ async function downloadAssets(assetIndex) {
       const object = entries[index];
       const hash = object.hash;
       const subDir = hash.substring(0, 2);
+      
+      // CRITICAL ASSERTION: Validate path construction
+      if (!hash || hash.length < 20) {
+        throw new Error(`Invalid asset hash: ${hash}`);
+      }
+      if (!subDir || subDir.length !== 2) {
+        throw new Error(`Invalid asset subdirectory: ${subDir}`);
+      }
+      
       const objectPath = path.join(assetsObjectsDir, subDir, hash);
+      
+      // ASSERTION: Verify path structure
+      if (!objectPath.includes(path.join('assets', 'objects', subDir))) {
+        throw new Error(`Asset path validation failed! Expected pattern '.minecraft/assets/objects/${subDir}/<hash>' but got: ${objectPath}`);
+      }
+      
+      // Log first 5 assets to verify path structure
+      if (index < 5) {
+        log(`Asset ${index}: hash=${hash}, subDir=${subDir}`);
+        log(`Asset ${index}: full path=${objectPath}`);
+      }
+      
       const url = `https://resources.download.minecraft.net/${subDir}/${hash}`;
       await downloadFile(url, objectPath, { 
         expectedSha1: hash, 
@@ -985,9 +1378,11 @@ function assertValidClientJar(clientJarPath) {
   }
   try {
     const zip = new AdmZip(clientJarPath);
-    const entry = zip.getEntry('net/minecraft/client/Minecraft.class');
-    if (!entry) {
-      throw new Error('Minecraft.class is missing');
+    // Check for main entry point (1.21+ uses net/minecraft/client/main/Main.class)
+    const modernMain = zip.getEntry('net/minecraft/client/main/Main.class');
+    const legacyMain = zip.getEntry('net/minecraft/client/Minecraft.class');
+    if (!modernMain && !legacyMain) {
+      throw new Error('Minecraft main class is missing (checked both modern and legacy locations)');
     }
   } catch (error) {
     const message = error?.message || 'Unknown error';
@@ -1804,6 +2199,426 @@ async function installModrinthShader({ projectId, mcVersion, profileName, title,
   return { file: destination };
 }
 
+// =============================
+// Modpack Manager
+// =============================
+
+const projectDetailsCache = new Map(); // Cache for project details
+
+async function getProjectDetails(projectId) {
+  // Check cache first
+  if (projectDetailsCache.has(projectId)) {
+    const cached = projectDetailsCache.get(projectId);
+    // Cache for 5 minutes
+    if (Date.now() - cached.timestamp < 300000) {
+      return cached.data;
+    }
+  }
+
+  const url = `https://api.modrinth.com/v2/project/${projectId}`;
+  
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'MCLauncher/1.0' } }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Modrinth API returned ${res.statusCode}`));
+        }
+        try {
+          const json = JSON.parse(data);
+          // Cache the result
+          projectDetailsCache.set(projectId, {
+            data: json,
+            timestamp: Date.now()
+          });
+          resolve(json);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+async function getProjectVersions(projectId) {
+  const url = `https://api.modrinth.com/v2/project/${projectId}/version`;
+  
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'MCLauncher/1.0' } }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Modrinth API returned ${res.statusCode}`));
+        }
+        try {
+          const json = JSON.parse(data);
+          resolve(json);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+async function searchModrinthModpacks(query, offset = 0) {
+  const limit = 20;
+  const url = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query)}&facets=[["project_type:modpack"]]&limit=${limit}&offset=${offset}`;
+  
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'MCLauncher/1.0' } }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Modrinth API returned ${res.statusCode}`));
+        }
+        try {
+          const json = JSON.parse(data);
+          resolve(json);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+async function getModpackVersions(projectId) {
+  const url = `https://api.modrinth.com/v2/project/${projectId}/version`;
+  
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'MCLauncher/1.0' } }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Modrinth API returned ${res.statusCode}`));
+        }
+        try {
+          const json = JSON.parse(data);
+          resolve(json);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+async function downloadModpack(versionId, projectSlug) {
+  const versions = await getModpackVersions(versionId);
+  if (!versions || versions.length === 0) {
+    throw new Error('No versions found for this modpack');
+  }
+  
+  const latestVersion = versions[0];
+  const mrpackFile = latestVersion.files.find(f => f.filename.endsWith('.mrpack'));
+  
+  if (!mrpackFile) {
+    throw new Error('No .mrpack file found in this version');
+  }
+  
+  const tempPath = path.join(app.getPath('temp'), mrpackFile.filename);
+  
+  log(`Downloading modpack: ${mrpackFile.filename}...`);
+  await downloadFile(mrpackFile.url, tempPath, {
+    skipVerification: true, // Skip hash verification for the mrpack file itself
+    onProgress: (stats) => {
+      const current = parseInt(stats.downloadedMB) || 0;
+      const total = parseInt(stats.totalMB) || 100;
+      reportProgress(`Downloading modpack`, current, total);
+      currentDownloadStats = stats;
+    }
+  });
+  
+  return { mrpackPath: tempPath, versionData: latestVersion };
+}
+
+async function installModpackFromMrpack(mrpackPath, customName = null) {
+  log('Extracting modpack...');
+  const zip = new AdmZip(mrpackPath);
+  const entries = zip.getEntries();
+  
+  // Find and parse modrinth.index.json
+  const indexEntry = entries.find(e => e.entryName === 'modrinth.index.json');
+  if (!indexEntry) {
+    throw new Error('Invalid .mrpack file: missing modrinth.index.json');
+  }
+  
+  const indexData = JSON.parse(indexEntry.getData().toString('utf8'));
+  const { name, versionId, dependencies, files } = indexData;
+  
+  // Determine Minecraft version and loader
+  const minecraftVersion = dependencies.minecraft;
+  const fabricVersion = dependencies['fabric-loader'];
+  const forgeVersion = dependencies.forge;
+  const quiltVersion = dependencies['quilt-loader'];
+  const neoforgeVersion = dependencies.neoforge;
+  
+  let loaderType = null;
+  let loaderVersion = null;
+  
+  if (fabricVersion) {
+    loaderType = 'fabric';
+    loaderVersion = fabricVersion;
+  } else if (forgeVersion) {
+    loaderType = 'forge';
+    loaderVersion = forgeVersion;
+  } else if (quiltVersion) {
+    loaderType = 'quilt';
+    loaderVersion = quiltVersion;
+  } else if (neoforgeVersion) {
+    loaderType = 'neoforge';
+    loaderVersion = neoforgeVersion;
+  }
+  
+  // Create version name
+  const versionName = customName || name || `modpack-${Date.now()}`;
+  const versionPath = path.join(versionsDir, versionName);
+  
+  if (fs.existsSync(versionPath)) {
+    throw new Error(`Version "${versionName}" already exists`);
+  }
+  
+  // STRUCTURE: Modpack behaves like an official Minecraft version
+  // - Lives in .minecraft/versions/<modpack-name>/
+  // - Contains: <name>.json, <name>.jar, client.jar, mods/, config/, saves/, etc.
+  // - Inheritance chain: modpack → loader → vanilla
+  // - All libraries/arguments inherited from parent
+  
+  // Ensure base Minecraft version is downloaded first
+  log(`Ensuring Minecraft ${minecraftVersion} is installed...`);
+  await ensureBaseVersionDownloaded(minecraftVersion);
+  
+  // Create version directory with full runtime structure
+  log('Creating version directory...');
+  const paths = ensureVersionRuntimeLayout(versionName, true);
+  
+  // Extract overrides (config, mods, saves, etc.) directly into version folder
+  log('Extracting modpack files...');
+  entries.forEach(entry => {
+    if (entry.entryName.startsWith('overrides/')) {
+      const relativePath = entry.entryName.replace('overrides/', '');
+      if (relativePath && !entry.isDirectory) {
+        const targetPath = path.join(versionPath, relativePath);
+        const targetDir = path.dirname(targetPath);
+        if (!fs.existsSync(targetDir)) {
+          fs.mkdirSync(targetDir, { recursive: true });
+        }
+        fs.writeFileSync(targetPath, entry.getData());
+      }
+    }
+  });
+  
+  // Download mods and other files from modpack manifest
+  if (files && files.length > 0) {
+    log(`Downloading ${files.length} mods...`);
+    let downloaded = 0;
+    
+    for (const file of files) {
+      const fileName = file.path.split('/').pop();
+      const targetPath = path.join(versionPath, file.path);
+      const targetDir = path.dirname(targetPath);
+      
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+      
+      try {
+        const downloadOptions = {
+          onProgress: (stats) => {
+            // Progress tracking
+          }
+        };
+        
+        if (file.hashes && file.hashes.sha1) {
+          downloadOptions.expectedSha1 = file.hashes.sha1;
+        }
+        
+        await downloadFile(file.downloads[0], targetPath, downloadOptions);
+        
+        downloaded++;
+        reportProgress(`Downloading mods`, downloaded, files.length);
+        
+      } catch (error) {
+        log(`Failed to download ${fileName}: ${error.message}`);
+      }
+    }
+  }
+  
+  // Build version.json for this modpack
+  let profileJson;
+  let loaderVersionId = null;
+  
+  if (loaderType === 'fabric') {
+    profileJson = await getFabricProfile(minecraftVersion);
+    loaderVersionId = minecraftVersion;
+  } else if (loaderType === 'quilt') {
+    profileJson = await getQuiltProfile(minecraftVersion);
+    loaderVersionId = minecraftVersion;
+  } else if (loaderType === 'forge' || loaderType === 'neoforge') {
+    // For Forge/NeoForge: Download installer and extract profile WITHOUT running processors
+    // This avoids the complex post-processing that often fails
+    log(`Fetching ${loaderType} profile for ${minecraftVersion}...`);
+    
+    try {
+      const forgeResult = await createForgeProfile(minecraftVersion, loaderType);
+      profileJson = forgeResult.profileJson;
+      
+      // Don't create a separate loader version - embed everything in modpack
+      loaderVersionId = minecraftVersion;
+      
+      log(`${loaderType} profile loaded successfully`);
+    } catch (error) {
+      log(`Warning: Could not fetch ${loaderType} profile: ${error.message}`);
+      log(`Modpack will use vanilla ${minecraftVersion} instead`);
+      
+      // Fallback to vanilla
+      const baseVersionJsonPath = path.join(versionsDir, minecraftVersion, `${minecraftVersion}.json`);
+      profileJson = JSON.parse(fs.readFileSync(baseVersionJsonPath, 'utf8'));
+      loaderVersionId = minecraftVersion;
+      loaderType = null; // Mark as vanilla
+    }
+  } else {
+    // Vanilla modpack - copy base version json
+    const baseVersionJsonPath = path.join(versionsDir, minecraftVersion, `${minecraftVersion}.json`);
+    profileJson = JSON.parse(fs.readFileSync(baseVersionJsonPath, 'utf8'));
+    loaderVersionId = minecraftVersion;
+  }
+  
+  profileJson.id = versionName;
+  profileJson.inheritsFrom = minecraftVersion; // Always inherit from vanilla base
+  profileJson.jar = versionName;
+  profileJson.time = new Date().toISOString();
+  profileJson.releaseTime = new Date().toISOString();
+  
+  // Keep all libraries and arguments from the Forge/Fabric profile
+  // Don't clear them - modpack needs them to run
+  
+  profileJson.launcher = {
+    modded: loaderType ? true : false,
+    isModpack: true,
+    modpackName: name,
+    modpackVersion: versionId,
+    loader: loaderType,
+    baseVersion: minecraftVersion,
+    loaderVersion: loaderVersionId
+  };
+  
+  // Write version.json
+  const versionJsonPath = path.join(versionPath, `${versionName}.json`);
+  fs.writeFileSync(versionJsonPath, JSON.stringify(profileJson, null, 2));
+  
+  // Copy JAR file from the base vanilla version
+  const baseJarPath = path.join(versionsDir, minecraftVersion, `${minecraftVersion}.jar`);
+  const targetJarPath = path.join(versionPath, `${versionName}.jar`);
+  
+  if (fs.existsSync(baseJarPath)) {
+    fs.copyFileSync(baseJarPath, targetJarPath);
+  }
+  
+  // For Forge/NeoForge, also copy vanilla jar as client.jar
+  if (loaderType === 'forge' || loaderType === 'neoforge') {
+    const targetClientJarPath = path.join(versionPath, 'client.jar');
+    if (fs.existsSync(baseJarPath)) {
+      fs.copyFileSync(baseJarPath, targetClientJarPath);
+      log('Created client.jar for Forge');
+    }
+  }
+  
+  // Download Forge/Fabric libraries
+  if (loaderType && profileJson.libraries) {
+    log('Downloading loader libraries...');
+    await downloadLibraries(profileJson.libraries, versionName, librariesDir, paths.nativesDir);
+  }
+  
+  log(`Modpack installed: ${versionName}`);
+  return { versionId: versionName, versionPath, loaderType, minecraftVersion };
+}
+
+function listInstalledModpacks() {
+  if (!fs.existsSync(versionsDir)) return [];
+  
+  const modpacks = [];
+  const dirs = fs.readdirSync(versionsDir);
+  
+  for (const dir of dirs) {
+    const versionPath = path.join(versionsDir, dir);
+    const versionJsonPath = path.join(versionPath, `${dir}.json`);
+    
+    if (fs.existsSync(versionJsonPath)) {
+      try {
+        const versionJson = JSON.parse(fs.readFileSync(versionJsonPath, 'utf8'));
+        const launcherMeta = versionJson.launcher || {};
+        
+        // Only include versions marked as modpacks
+        if (launcherMeta.isModpack) {
+          modpacks.push({
+            name: dir,
+            versionId: dir,
+            path: versionPath,
+            modpackName: launcherMeta.modpackName || dir,
+            modpackVersion: launcherMeta.modpackVersion,
+            minecraftVersion: launcherMeta.baseVersion || versionJson.inheritsFrom,
+            loaderType: launcherMeta.loader,
+            createdAt: versionJson.time
+          });
+        }
+      } catch (error) {
+        // Ignore invalid version files
+      }
+    }
+  }
+  
+  return modpacks;
+}
+
+function deleteModpack(versionId) {
+  const versionPath = path.join(versionsDir, versionId);
+  
+  if (!fs.existsSync(versionPath)) {
+    throw new Error(`Modpack version "${versionId}" not found`);
+  }
+  
+  // Verify it's actually a modpack before deleting
+  const versionJsonPath = path.join(versionPath, `${versionId}.json`);
+  if (fs.existsSync(versionJsonPath)) {
+    const versionJson = JSON.parse(fs.readFileSync(versionJsonPath, 'utf8'));
+    if (!versionJson.launcher?.isModpack) {
+      throw new Error(`Version "${versionId}" is not a modpack`);
+    }
+  }
+  
+  fs.rmSync(versionPath, { recursive: true, force: true });
+  log(`Deleted modpack: ${versionId}`);
+  
+  return { success: true };
+}
+
+async function launchModpack(versionId) {
+  const versionPath = path.join(versionsDir, versionId);
+  const versionJsonPath = path.join(versionPath, `${versionId}.json`);
+  
+  if (!fs.existsSync(versionJsonPath)) {
+    throw new Error(`Modpack version "${versionId}" not found`);
+  }
+  
+  const versionJson = JSON.parse(fs.readFileSync(versionJsonPath, 'utf8'));
+  const launcherMeta = versionJson.launcher || {};
+  
+  if (!launcherMeta.isModpack) {
+    throw new Error(`Version "${versionId}" is not a modpack`);
+  }
+  
+  log(`Launching modpack: ${launcherMeta.modpackName || versionId}`);
+  
+  // Return the versionId to launch - it's now a self-contained version
+  return { versionId };
+}
+
 ipcMain.handle('fetch-versions', async () => {
   const manifest = await getManifest();
   return manifest.versions.filter((version) => version.type === 'release');
@@ -1832,6 +2647,12 @@ ipcMain.handle('fix-version', async (_event, versionId) => {
       const paths = ensureVersionRuntimeLayout(versionId, true);
       const clientJarPath = path.join(paths.versionDir, 'client.jar');
       await ensureClientJarFromBase({ baseVersion: base, targetPath: clientJarPath, installerPath: null });
+      
+      // Re-download libraries (skips Forge-generated SRG/extra/client jars)
+      log('Re-downloading libraries...');
+      await downloadLibraries(versionJson.libraries, versionId, librariesDir, paths.nativesDir);
+      log('Re-downloading assets...');
+      await downloadAssets(versionJson.assetIndex);
     }
   } else {
     // For vanilla/custom non-modded, re-download missing pieces
@@ -1956,9 +2777,133 @@ ipcMain.handle('fetch-json', async (_event, url) => {
   return fetchJson(url);
 });
 
+// Modpack IPC handlers
+ipcMain.handle('search-modpacks', async (_event, payload) => {
+  const { query, offset } = payload || {};
+  try {
+    return await searchModrinthModpacks(query || '', offset || 0);
+  } catch (error) {
+    log(`Modpack search error: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-project-details', async (_event, projectId) => {
+  try {
+    return await getProjectDetails(projectId);
+  } catch (error) {
+    log(`Get project details error: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-project-versions', async (_event, projectId) => {
+  try {
+    return await getProjectVersions(projectId);
+  } catch (error) {
+    log(`Get project versions error: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-modpack-versions', async (_event, projectId) => {
+  try {
+    return await getModpackVersions(projectId);
+  } catch (error) {
+    log(`Get modpack versions error: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('install-modpack', async (_event, payload) => {
+  const { projectId, projectSlug } = payload || {};
+  if (!projectId) {
+    throw new Error('Missing projectId');
+  }
+  
+  try {
+    const { mrpackPath, versionData } = await downloadModpack(projectId, projectSlug);
+    const result = await installModpackFromMrpack(mrpackPath, projectSlug);
+    
+    // Clean up temp file
+    if (fs.existsSync(mrpackPath)) {
+      fs.unlinkSync(mrpackPath);
+    }
+    
+    return result;
+  } catch (error) {
+    log(`Install modpack error: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('import-modpack', async (_event, mrpackPath) => {
+  if (!mrpackPath || !fs.existsSync(mrpackPath)) {
+    throw new Error('Invalid .mrpack file path');
+  }
+  
+  try {
+    return await installModpackFromMrpack(mrpackPath);
+  } catch (error) {
+    log(`Import modpack error: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('list-modpacks', async () => {
+  try {
+    return listInstalledModpacks();
+  } catch (error) {
+    log(`List modpacks error: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('delete-modpack', async (_event, versionId) => {
+  if (!versionId) {
+    throw new Error('Missing versionId');
+  }
+  
+  try {
+    return deleteModpack(versionId);
+  } catch (error) {
+    log(`Delete modpack error: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('launch-modpack', async (_event, versionId) => {
+  if (!versionId) {
+    throw new Error('Missing versionId');
+  }
+  
+  try {
+    return await launchModpack(versionId);
+  } catch (error) {
+    log(`Launch modpack error: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('open-modpack-folder', async (_event, versionId) => {
+  const versionPath = path.join(versionsDir, versionId);
+  
+  if (!fs.existsSync(versionPath)) {
+    throw new Error(`Modpack version "${versionId}" not found`);
+  }
+  
+  shell.openPath(versionPath);
+  return { success: true };
+});
+
 ipcMain.handle('list-installed-mods', async (_event, profileName) => {
   if (!profileName) return [];
   return listInstalledMods(profileName);
+});
+
+ipcMain.handle('scan-mods-folder', async (_event, profileName) => {
+  if (!profileName) return { scanned: 0, added: 0 };
+  return await scanModsFolder(profileName);
 });
 
 ipcMain.handle('remove-mod', async (_event, payload) => {
@@ -2026,7 +2971,7 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   const username = payload.username || 'Player';
   const javaPathOverride = payload.javaPath;
   const memoryGb = Number(payload.memoryGb || 0);
-  const skipPreparation = payload.skipPreparation !== undefined ? Boolean(payload.skipPreparation) : true;
+  const skipPreparation = payload.skipPreparation !== undefined ? Boolean(payload.skipPreparation) : false;
 
   isPreparingGame = true;
   cancelPreparation = false;
@@ -2089,29 +3034,58 @@ ipcMain.handle('launch-game', async (_event, payload) => {
     throw new Error('Preparation cancelled');
   }
 
-  const classpathEntries = [];
+  // Get launcher metadata early (needed for classpath construction)
+  const meta = getLauncherMetadata(versionJson);
 
+  // Build classpath: libraries first, then JARs in correct order
+  const classpathEntries = [];
+  const addedPaths = new Set(); // Track to avoid duplicates
+
+  // 1. Add all libraries (Forge dependencies, etc.)
   for (const library of resolved.libraries.filter(isLibraryAllowed)) {
     const libPath = buildLibraryPath(library, librariesDir);
-    if (libPath && fs.existsSync(libPath)) {
+    if (libPath && fs.existsSync(libPath) && !addedPaths.has(libPath)) {
       classpathEntries.push(libPath);
+      addedPaths.add(libPath);
     }
   }
 
-  for (const jarId of resolved.jarIds) {
-    const jarPath = path.join(versionsDir, jarId, `${jarId}.jar`);
-    if (!fs.existsSync(jarPath)) {
-      throw new Error(`Jar not found: ${jarPath}. Please download the version first.`);
+  // 2. Add JARs in correct order for Forge
+  // For modpack inheriting from loader: base.jar, modpack.jar, client.jar
+  // For loader inheriting from base: base.jar, loader.jar
+  // For base only: base.jar
+  
+  const isForgeOrNeoforge = meta?.loader === 'forge' || meta?.loader === 'neoforge';
+  const baseJarId = resolved.jarIds[0]; // First = base vanilla
+  const currentJarId = resolved.jarIds[resolved.jarIds.length - 1]; // Last = current version
+  
+  // Add base Minecraft jar with fallback logic
+  if (baseJarId) {
+    const baseJarPath = resolveJarPath(baseJarId, versionsDir);
+    if (baseJarPath && !addedPaths.has(baseJarPath)) {
+      log(`Adding to classpath: ${baseJarPath}`);
+      classpathEntries.push(baseJarPath);
+      addedPaths.add(baseJarPath);
     }
-    log(`Adding to classpath: ${jarPath}`);
-    classpathEntries.push(jarPath);
+  }
+  
+  // Add current version jar (modpack or loader) with fallback logic
+  if (currentJarId && currentJarId !== baseJarId) {
+    const currentJarPath = resolveJarPath(currentJarId, versionsDir);
+    if (currentJarPath && !addedPaths.has(currentJarPath)) {
+      log(`Adding to classpath: ${currentJarPath}`);
+      classpathEntries.push(currentJarPath);
+      addedPaths.add(currentJarPath);
+    }
   }
 
-  if (getLauncherMetadata(versionJson)?.loader === 'forge' || getLauncherMetadata(versionJson)?.loader === 'neoforge') {
+  // 3. For Forge/NeoForge: add client.jar from version directory if it exists
+  if (isForgeOrNeoforge) {
     const clientJarPath = path.join(paths.versionDir, 'client.jar');
-    if (fs.existsSync(clientJarPath)) {
+    if (fs.existsSync(clientJarPath) && !addedPaths.has(clientJarPath)) {
       log(`Adding to classpath: ${clientJarPath}`);
       classpathEntries.push(clientJarPath);
+      addedPaths.add(clientJarPath);
     }
   }
 
@@ -2119,14 +3093,15 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   const classpath = classpathEntries.join(classpathSeparator);
 
   const nativesDir = paths.nativesDir;
-
-  const meta = getLauncherMetadata(versionJson);
-  const modsDir = meta?.modded ? paths.modsDir : null;
+  
+  // Always use version directory as game directory
+  const gameDirectory = paths.versionDir;
+  const modsDir = (meta?.modded || meta?.isModpack) ? paths.modsDir : null;
 
   const variables = {
     auth_player_name: username,
     version_name: versionId,
-    game_directory: paths.versionDir,
+    game_directory: gameDirectory,
     assets_root: paths.assetsDir,
     assets_index_name: resolved.assetIndex?.id || versionId,
     auth_uuid: '00000000-0000-0000-0000-000000000000',
@@ -2136,17 +3111,28 @@ ipcMain.handle('launch-game', async (_event, payload) => {
     natives_directory: nativesDir,
     launcher_name: 'minecraft-launcher',
     launcher_version: '1.0',
-    classpath_separator: classpathSeparator
+    classpath_separator: classpathSeparator,
+    classpath: classpath,
+    library_directory: librariesDir,
+    version_directory: paths.versionDir
   };
 
   const jvmArgs = [];
   
   if (resolved.jvmArguments && resolved.jvmArguments.length > 0) {
     const resolvedJvm = resolveArguments(resolved.jvmArguments, variables);
+    let skipNext = false;
     for (const arg of resolvedJvm) {
-      if (arg !== '-cp' && !arg.includes('${classpath}')) {
-        jvmArgs.push(arg);
+      // Skip -cp flag and its value as we'll add it manually
+      if (skipNext) {
+        skipNext = false;
+        continue;
       }
+      if (arg === '-cp' || arg === '--class-path' || arg === '-classpath') {
+        skipNext = true;
+        continue;
+      }
+      jvmArgs.push(arg);
     }
   } else {
     jvmArgs.push('-Xmx2G', '-Xms1G');
@@ -2192,9 +3178,11 @@ ipcMain.handle('launch-game', async (_event, payload) => {
       throw new Error('Forge base version is missing. Cannot resolve Minecraft client JAR.');
     }
     const forgeVersion = meta?.forgeVersion || extractForgeVersionFromLibraries(versionJson.libraries);
-    const installerPath = (!skipPreparation && forgeVersion)
-      ? await ensureForgeInstaller({ loaderType: meta.loader, forgeVersion })
-      : null;
+    
+    // For imported modpacks, skip Forge processor - just use vanilla jar
+    // Only run processor for manually created Forge profiles
+    const installerPath = null;
+    
     await ensureClientJarFromBase({ baseVersion, targetPath: clientJarPath, installerPath });
 
     const mcVersion = extractMcVersionFromForgeVersion(forgeVersion) || baseVersion;
@@ -2227,10 +3215,20 @@ ipcMain.handle('launch-game', async (_event, payload) => {
   ];
 
   log('Launching game...');
-  log(`Full command: java ${args.join(' ')}`);
+  log(`Main class: ${resolved.mainClass || 'net.minecraft.client.main.Main'}`);
+  log(`Classpath entries: ${classpathEntries.length}`);
+  log(`JVM args count: ${jvmArgs.length}`);
+  log(`Game args count: ${gameArgs.length}`);
+  log(`Game directory: ${gameDirectory}`);
+  
+  // Debug: Log first few classpath entries
+  log(`First 3 classpath entries:`);
+  classpathEntries.slice(0, 3).forEach((entry, i) => {
+    log(`  ${i}: ${entry}`);
+  });
 
   const child = spawn(javaExecutable, args, {
-    cwd: minecraftDir,
+    cwd: gameDirectory,
     detached: true
   });
 

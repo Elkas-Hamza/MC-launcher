@@ -28,6 +28,18 @@ contextBridge.exposeInMainWorld('minecraftLauncher', {
   deleteVersion: (versionId) => ipcRenderer.invoke('delete-version', versionId),
   cancelPreparation: () => ipcRenderer.invoke('cancel-preparation'),
   fetchJson: (url) => ipcRenderer.invoke('fetch-json', url),
+  // Modpack APIs
+  searchModpacks: (payload) => ipcRenderer.invoke('search-modpacks', payload),
+  getModpackVersions: (projectId) => ipcRenderer.invoke('get-modpack-versions', projectId),
+  getProjectDetails: (projectId) => ipcRenderer.invoke('get-project-details', projectId),
+  getProjectVersions: (projectId) => ipcRenderer.invoke('get-project-versions', projectId),
+  installModpack: (payload) => ipcRenderer.invoke('install-modpack', payload),
+  importModpack: (mrpackPath) => ipcRenderer.invoke('import-modpack', mrpackPath),
+  listModpacks: () => ipcRenderer.invoke('list-modpacks'),
+  deleteModpack: (instanceName) => ipcRenderer.invoke('delete-modpack', instanceName),
+  launchModpack: (instanceName) => ipcRenderer.invoke('launch-modpack', instanceName),
+  openModpackFolder: (instanceName) => ipcRenderer.invoke('open-modpack-folder', instanceName),
+  scanModsFolder: (profileName) => ipcRenderer.invoke('scan-mods-folder', profileName),
   onLog: (callback) => ipcRenderer.on('log', (_event, message) => callback(message)),
   onProgress: (callback) => ipcRenderer.on('progress', (_event, data) => callback(data)),
   onPreparationState: (callback) => ipcRenderer.on('preparation-state', (_event, isActive) => callback(isActive))

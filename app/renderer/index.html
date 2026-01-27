@@ -9,6 +9,7 @@
   <body>
     <div class="tabs">
       <button class="tab-button active" data-tab="play">Play</button>
+      <button class="tab-button" data-tab="modpacks">Modpacks</button>
       <button class="tab-button" data-tab="mods">Mods</button>
       <button class="tab-button" data-tab="resourcepacks">Resource Packs</button>
       <button class="tab-button" data-tab="shaders">Shaders</button>
@@ -18,6 +19,30 @@
 
       <div class="tab-content active" id="tab-play">
         <div class="play-info">Select a version and press Play to launch.</div>
+      </div>
+
+      <div class="tab-content" id="tab-modpacks">
+        <div class="modpacks-header">
+          <h2>Modrinth Modpacks</h2>
+          <button id="import-modpack" class="secondary">Import .mrpack</button>
+        </div>
+
+        <div class="modpacks-search">
+          <input id="modpack-search" type="text" placeholder="Search modpacks from Modrinth..." />
+          <button id="modpack-search-btn">Search</button>
+        </div>
+
+        <div class="modpacks-layout">
+          <div class="modpacks-main">
+            <div id="modpacks-list" class="modpacks-list"></div>
+            <button id="load-more-modpacks" class="load-more-btn hidden">Load More</button>
+          </div>
+
+          <div class="modpacks-sidebar">
+            <h3>Installed Modpacks</h3>
+            <div id="installed-modpacks" class="installed-modpacks"></div>
+          </div>
+        </div>
       </div>
 
       <div class="tab-content" id="tab-mods">
@@ -47,7 +72,10 @@
           </div>
 
           <div class="mods-sidebar">
-            <h3>Installed Mods</h3>
+            <div class="mods-sidebar-header">
+              <h3>Installed Mods</h3>
+              <button id="scan-mods-folder" class="secondary" title="Scan mods folder and detect installed mods">Scan Folder</button>
+            </div>
             <div id="installed-mods" class="installed-mods"></div>
           </div>
         </div>
@@ -114,6 +142,10 @@
           <label class="toggle-row" for="show-logs">
             <input type="checkbox" id="show-logs" />
             <span>Show logs</span>
+          </label>
+          <label class="toggle-row" for="skip-preparation">
+            <input type="checkbox" id="skip-preparation" />
+            <span>Skip preparation (libraries/assets download)</span>
           </label>
         </div>
 
@@ -210,6 +242,71 @@
           <button id="modded-settings-close" class="secondary">Close</button>
         </div>
       </div>
+    </div>
+
+    <div id="details-modal" class="modal hidden">
+      <div class="details-modal-content">
+        <button class="details-close" id="details-close">✕</button>
+        
+        <div class="details-header">
+          <img class="details-icon" id="details-icon" src="" alt="">
+          <div class="details-title-section">
+            <h2 id="details-title"></h2>
+            <div class="details-meta" id="details-meta"></div>
+            <div class="details-tags" id="details-tags"></div>
+          </div>
+          <div class="details-actions">
+            <button id="details-action-btn" class="details-install-btn"></button>
+          </div>
+        </div>
+
+        <div class="details-body">
+          <div class="details-main">
+            <div class="details-info">
+              <div class="details-info-row">
+                <span class="details-info-label">Downloads</span>
+                <span class="details-info-value" id="details-downloads"></span>
+              </div>
+              <div class="details-info-row">
+                <span class="details-info-label">Updated</span>
+                <span class="details-info-value" id="details-updated"></span>
+              </div>
+              <div class="details-info-row">
+                <span class="details-info-label">Author</span>
+                <span class="details-info-value" id="details-author"></span>
+              </div>
+              <div class="details-info-row">
+                <span class="details-info-label">Versions</span>
+                <span class="details-info-value" id="details-versions"></span>
+              </div>
+              <div class="details-info-row">
+                <span class="details-info-label">Loaders</span>
+                <span class="details-info-value" id="details-loaders"></span>
+              </div>
+            </div>
+
+            <div class="details-description">
+              <h3>Description</h3>
+              <div id="details-description-content" class="details-description-content"></div>
+            </div>
+          </div>
+
+          <div class="details-sidebar">
+            <h3>Gallery</h3>
+            <div class="details-gallery" id="details-gallery">
+              <div class="details-gallery-empty">No screenshots available</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="gallery-viewer" class="gallery-viewer hidden">
+      <button class="gallery-close" id="gallery-close">✕</button>
+      <button class="gallery-prev" id="gallery-prev">‹</button>
+      <button class="gallery-next" id="gallery-next">›</button>
+      <img class="gallery-image" id="gallery-image" src="" alt="">
+      <div class="gallery-counter" id="gallery-counter"></div>
     </div>
 
     <script src="renderer.js"></script>
