@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MC Launcher</title>
+
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #111827;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #22c55e;
+    }
+
+    * {
+      box-sizing: border-box;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: linear-gradient(135deg, #020617, #0f172a);
+      color: var(--text);
+    }
+
+    .container {
+      max-width: 1100px;
+      margin: auto;
+      padding: 4rem 1.5rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    header h1 {
+      font-size: 3rem;
+      margin-bottom: 0.5rem;
+    }
+
+    header p {
+      color: var(--muted);
+      font-size: 1.2rem;
+    }
+
+    .cta {
+      margin-top: 2rem;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 0.9rem 1.8rem;
+      background: var(--accent);
+      color: #022c22;
+      text-decoration: none;
+      font-weight: 600;
+      border-radius: 0.6rem;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      box-shadow: 0 10px 30px rgba(34,197,94,0.25);
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 15px 40px rgba(34,197,94,0.4);
+    }
+
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1.5rem;
+      margin-top: 4rem;
+    }
+
+    .card {
+      background: rgba(17, 24, 39, 0.7);
+      border-radius: 1rem;
+      padding: 1.8rem;
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .card h3 {
+      margin-top: 0;
+      margin-bottom: 0.5rem;
+    }
+
+    .card p {
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 5rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <h1>MC Launcher</h1>
+      <p>A custom Minecraft launcher with modpacks, mods, shaders & resource packs</p>
+
+      <div class="cta">
+        <a class="btn" href="https://github.com/Elkas-Hamza/MC-launcher/releases">
+          Download Latest Version
+        </a>
+      </div>
+    </header>
+
+    <section class="features">
+      <div class="card">
+        <h3>🧩 Modpack Support</h3>
+        <p>Install modpacks and run them as separate Minecraft versions, just like official profiles.</p>
+      </div>
+
+
+      <div class="card">
+        <h3>🌈 Shaders & Resource Packs</h3>
+        <p>Browse and install shaders and resource packs directly from Modrinth.</p>
+      </div>
+
+      <div class="card">
+        <h3>⚡ Clean Version Management</h3>
+        <p>Each modpack has its own version folder and appears in the Versions tab.</p>
+      </div>
+    </section>
+
+    <footer>
+      <p>
+        Open-source on
+        <a href="https://github.com/Elkas-Hamza/MC-launcher">GitHub</a>
+        • Built with ❤️ for Minecraft
+      </p>
+    </footer>
+  </div>
+
+</body>
+</html>
