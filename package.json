@@ -1,6 +1,6 @@
 {
   "name": "mclauncher",
-  "version": "2.0.0",
+  "version": "2.1.1",
   "description": "Minecraft launcher built by Elkas-hamza",
   "main": "app/main.js",
   "author": "",
@@ -8,7 +8,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build:linux": "electron-builder --linux",
+    "build:win": "electron-builder --win"
   },
   "build": {
     "appId": "com.elkas.minecraft.launcher",
@@ -24,7 +25,19 @@
       "target": "nsis",
       "icon": "build/favicon.ico",
       "artifactName": "${productName}-Setup-${version}.${ext}",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "publisherName": "Elkas-hamza"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Game",
+      "artifactName": "${productName}-${version}-linux.${ext}",
+      "icon": "build/icon.png",
+      "desktop": {
+        "Name": "MClauncher",
+        "Comment": "Minecraft Launcher",
+        "StartupWMClass": "MClauncher"
+      }
     },
     "nsis": {
       "installerIcon": "build/favicon.ico",
