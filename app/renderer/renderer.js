@@ -262,27 +262,30 @@ function renderModsList(mods = [], append = false) {
   const installedSet = new Set((installedMods || []).map((mod) => mod.projectId));
 
   mods.forEach((mod) => {
-    if (mod.icon_url) {
-      log(`Downloading icon for ${mod.title}...`);
-    }
+    const modId = mod.id || mod.project_id;
+    const modTitle = mod.name || mod.title;
+    const modIcon = mod.logo?.url || mod.icon_url || '';
+    const modDesc = mod.summary || mod.description || '';
+    const modAuthor = (mod.authors && mod.authors[0]?.name) || mod.author || 'Unknown author';
+    
     const item = document.createElement('div');
     item.className = 'mod-item';
-    item.dataset.projectId = mod.project_id;
+    item.dataset.projectId = modId;
     item.dataset.contentType = 'mod';
-    const isInstalled = installedSet.has(mod.project_id);
+    const isInstalled = installedSet.has(modId);
     item.innerHTML = `
-      <img class="mod-icon" src="${mod.icon_url || ''}" alt="${mod.title}" />
+      <img class="mod-icon" src="${modIcon}" alt="${modTitle}" />
       <div class="mod-meta">
-        <h3>${mod.title}</h3>
-        <p>${mod.description || ''}</p>
-        <div class="mod-author">${mod.author || 'Unknown author'}</div>
+        <h3>${modTitle}</h3>
+        <p>${modDesc}</p>
+        <div class="mod-author">${modAuthor}</div>
       </div>
       <div class="mod-actions">
         <button 
-          data-project-id="${mod.project_id}"
-          data-title="${mod.title}"
-          data-icon-url="${mod.icon_url || ''}"
-          data-author="${mod.author || 'Unknown author'}"
+          data-mod-id="${modId}"
+          data-title="${modTitle}"
+          data-icon-url="${modIcon}"
+          data-author="${modAuthor}"
           ${isInstalled ? 'class="secondary" disabled' : ''}>
           ${isInstalled ? 'Installed' : 'Install'}
         </button>
@@ -511,25 +514,31 @@ function renderResourcepacksList(resourcepacks = [], append = false) {
   }
 
   resourcepacks.forEach((pack) => {
+    const packId = pack.id || pack.project_id;
+    const packTitle = pack.name || pack.title;
+    const packIcon = pack.logo?.url || pack.icon_url || '';
+    const packDesc = pack.summary || pack.description || '';
+    const packAuthor = (pack.authors && pack.authors[0]?.name) || pack.author || '';
+    
     const item = document.createElement('div');
     item.className = 'resourcepack-item';
     
     // Check if already installed - get installed resource packs from the sidebar
     const installedResourcepacks = Array.from(installedResourcepacksList.querySelectorAll('[data-installed-id]')).map(el => el.dataset.installedId);
-    const isInstalled = installedResourcepacks.includes(pack.project_id);
+    const isInstalled = installedResourcepacks.includes(packId);
     
     item.innerHTML = `
-      <img class="resourcepack-icon" src="${pack.icon_url || ''}" alt="${pack.title}" />
+      <img class="resourcepack-icon" src="${packIcon}" alt="${packTitle}" />
       <div class="resourcepack-meta">
-        <h3>${pack.title}</h3>
-        <p>${pack.description || ''}</p>
+        <h3>${packTitle}</h3>
+        <p>${packDesc}</p>
       </div>
       <div class="mod-actions">
         <button 
-          data-project-id="${pack.project_id}" 
-          data-title="${pack.title}" 
-          data-icon-url="${pack.icon_url || ''}"
-          data-author="${pack.author || ''}"
+          data-mod-id="${packId}" 
+          data-title="${packTitle}" 
+          data-icon-url="${packIcon}"
+          data-author="${packAuthor}"
           ${isInstalled ? 'class="secondary" disabled' : ''}>
           ${isInstalled ? 'Installed' : 'Install'}
         </button>
@@ -550,12 +559,12 @@ async function fetchResourcepacks(query = '', offset = 0) {
       mcVersion = currentVersionInfo.baseVersion;
     }
     
-    const facets = [
-      ['project_type:resourcepack'],
-      [`versions:${mcVersion}`]
-    ];
-    const url = `https://api.modrinth.com/v2/search?query=${encodeURIComponent(query || '')}&limit=25&offset=${offset}&index=relevance&facets=${encodeURIComponent(JSON.stringify(facets))}`;
-    const response = await window.minecraftLauncher.fetchJson(url);
+    const response = await window.minecraftLauncher.searchResourcepacks({
+      query,
+      mcVersion,
+      offset,
+      limit: 25
+    });
     return response;
   } catch (error) {
     log(`Failed to fetch resource packs: ${error.message}`);
@@ -639,17 +648,22 @@ function renderShadersList(shaders = [], append = false) {
   const installedSet = new Set(Array.from(installedShadersList.querySelectorAll('[data-installed-id]')).map(el => el.dataset.installedId));
 
   shaders.forEach((s) => {
+    const shaderId = s.id || s.project_id;
+    const shaderTitle = s.name || s.title;
+    const shaderIcon = s.logo?.url || s.icon_url || '';
+    const shaderDesc = s.summary || s.description || '';
+    
     const item = document.createElement('div');
     item.className = 'resourcepack-item';
-    const isInstalled = installedSet.has(s.project_id);
+    const isInstalled = installedSet.has(shaderId);
     item.innerHTML = `
-      <img class="resourcepack-icon" src="${s.icon_url || ''}" alt="${s.title}" />
+      <img class="resourcepack-icon" src="${shaderIcon}" alt="${shaderTitle}" />
       <div class="resourcepack-meta">
-        <h3>${s.title}</h3>
-        <p>${s.description || ''}</p>
+        <h3>${shaderTitle}</h3>
+        <p>${shaderDesc}</p>
       </div>
       <div class="mod-actions">
-        <button data-project-id="${s.project_id}" data-title="${s.title}" data-icon-url="${s.icon_url || ''}" ${isInstalled ? 'class="secondary" disabled' : ''}>
+        <button data-mod-id="${shaderId}" data-title="${shaderTitle}" data-icon-url="${shaderIcon}" ${isInstalled ? 'class="secondary" disabled' : ''}>
           ${isInstalled ? 'Installed' : 'Install'}
         </button>
       </div>
@@ -1118,14 +1132,14 @@ modsList.addEventListener('click', async (event) => {
     }
   }
   
-  const button = event.target.closest('button[data-project-id]');
+  const button = event.target.closest('button[data-mod-id]');
   if (!button || button.disabled) return;
   if (!currentVersionInfo?.isModded) {
     log('Select a modded version first.');
     return;
   }
-  const projectId = button.dataset.projectId;
-  const title = button.dataset.title || button.closest('.mod-item')?.querySelector('h3')?.textContent || projectId;
+  const modId = button.dataset.modId;
+  const title = button.dataset.title || button.closest('.mod-item')?.querySelector('h3')?.textContent || modId;
   const author = button.dataset.author || button.closest('.mod-item')?.querySelector('.mod-author')?.textContent || 'Unknown author';
   const iconUrl = button.dataset.iconUrl || button.closest('.mod-item')?.querySelector('img')?.getAttribute('src') || '';
   
@@ -1134,7 +1148,7 @@ modsList.addEventListener('click', async (event) => {
     button.textContent = 'Installing...';
     
     await window.minecraftLauncher.installMod({
-      projectId,
+      modId,
       mcVersion: currentVersionInfo.baseVersion,
       loader: currentVersionInfo.loader,
       profileName: currentVersionInfo.id,
@@ -1157,24 +1171,24 @@ shadersList.addEventListener('click', async (event) => {
   // Check if clicking on item itself (not button)
   const item = event.target.closest('.resourcepack-item, .shader-item');
   if (item && !event.target.closest('button')) {
-    const button = item.querySelector('button[data-project-id]');
+    const button = item.querySelector('button[data-mod-id]');
     if (button) {
-      const projectId = button.dataset.projectId;
-      if (projectId) {
-        await openDetailsView(projectId, 'shader');
+      const modId = button.dataset.modId;
+      if (modId) {
+        await openDetailsView(modId, 'shader');
         return;
       }
     }
   }
   
-  const button = event.target.closest('button[data-project-id]');
+  const button = event.target.closest('button[data-mod-id]');
   if (!button || button.disabled) return;
   if (!currentVersionInfo?.id) {
     log('Select a version first.');
     return;
   }
-  const projectId = button.dataset.projectId;
-  const title = button.dataset.title || button.closest('.resourcepack-item')?.querySelector('h3')?.textContent || projectId;
+  const modId = button.dataset.modId;
+  const title = button.dataset.title || button.closest('.resourcepack-item')?.querySelector('h3')?.textContent || modId;
   const author = button.dataset.author || '';
   const iconUrl = button.dataset.iconUrl || button.closest('.resourcepack-item')?.querySelector('img')?.getAttribute('src') || '';
   const baseVersion = currentVersionInfo.baseVersion || currentVersionInfo.id;
@@ -1184,7 +1198,7 @@ shadersList.addEventListener('click', async (event) => {
     button.textContent = 'Installing...';
 
     await window.minecraftLauncher.installShader({
-      projectId,
+      modId,
       mcVersion: baseVersion,
       profileName: currentVersionInfo.id,
       title,
@@ -1288,24 +1302,24 @@ resourcepacksList.addEventListener('click', async (event) => {
   // Check if clicking on item itself (not button)
   const item = event.target.closest('.resourcepack-item');
   if (item && !event.target.closest('button')) {
-    const button = item.querySelector('button[data-project-id]');
+    const button = item.querySelector('button[data-mod-id]');
     if (button) {
-      const projectId = button.dataset.projectId;
-      if (projectId) {
-        await openDetailsView(projectId, 'resourcepack');
+      const modId = button.dataset.modId;
+      if (modId) {
+        await openDetailsView(modId, 'resourcepack');
         return;
       }
     }
   }
   
-  const button = event.target.closest('button[data-project-id]');
+  const button = event.target.closest('button[data-mod-id]');
   if (!button || button.disabled) return;
   if (!currentVersionInfo?.id) {
     log('Select a version first.');
     return;
   }
-  const projectId = button.dataset.projectId;
-  const title = button.dataset.title || button.closest('.resourcepack-item')?.querySelector('h3')?.textContent || projectId;
+  const modId = button.dataset.modId;
+  const title = button.dataset.title || button.closest('.resourcepack-item')?.querySelector('h3')?.textContent || modId;
   const author = button.dataset.author || '';
   const iconUrl = button.dataset.iconUrl || button.closest('.resourcepack-item')?.querySelector('img')?.getAttribute('src') || '';
   const baseVersion = currentVersionInfo.baseVersion || currentVersionInfo.id;
@@ -1315,7 +1329,7 @@ resourcepacksList.addEventListener('click', async (event) => {
     button.textContent = 'Installing...';
     
     await window.minecraftLauncher.installResourcepack({
-      projectId,
+      modId,
       mcVersion: baseVersion,
       profileName: currentVersionInfo.id,
       title,
@@ -1404,29 +1418,33 @@ function renderModpacks(hits, append = false) {
   hits.forEach(modpack => {
     const item = document.createElement('div');
     item.className = 'modpack-item';
-    item.dataset.projectId = modpack.project_id;
+    const modpackId = modpack.id || modpack.project_id;
+    const modpackTitle = modpack.name || modpack.title;
+    const modpackSlug = modpack.slug || modpackTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    
+    item.dataset.projectId = modpackId;
     item.dataset.contentType = 'modpack';
     
-    const iconUrl = modpack.icon_url || modpack.gallery?.[0]?.url || '';
-    const author = modpack.author || 'Unknown';
-    const downloads = modpack.downloads ? modpack.downloads.toLocaleString() : '0';
-    const description = modpack.description || 'No description available';
+    const iconUrl = modpack.logo?.url || modpack.icon_url || modpack.gallery?.[0]?.url || '';
+    const author = (modpack.authors && modpack.authors[0]?.name) || modpack.author || 'Unknown';
+    const downloads = modpack.downloadCount || modpack.downloads || 0;
+    const description = modpack.summary || modpack.description || 'No description available';
     
     // Check if installed by matching slug to versionId (since we use slug as custom name)
-    const isInstalled = installedModpacks.some(mp => mp.versionId === modpack.slug || mp.name === modpack.slug);
+    const isInstalled = installedModpacks.some(mp => mp.versionId === modpackSlug || mp.name === modpackSlug);
     
     item.innerHTML = `
-      <img class="modpack-icon" src="${iconUrl || 'data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'64\' height=\'64\'%3E%3Crect width=\'64\' height=\'64\' fill=\'%23333\'/%3E%3C/svg%3E'}" alt="${modpack.title}" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'64\\' height=\\'64\\'%3E%3Crect width=\\'64\\' height=\\'64\\' fill=\\'%23333\\'/%3E%3C/svg%3E'">
+      <img class="modpack-icon" src="${iconUrl || 'data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'64\' height=\'64\'%3E%3Crect width=\'64\' height=\'64\' fill=\'%23333\'/%3E%3C/svg%3E'}" alt="${modpackTitle}" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'64\\' height=\\'64\\'%3E%3Crect width=\\'64\\' height=\\'64\\' fill=\\'%23333\\'/%3E%3C/svg%3E'">
       <div class="modpack-info">
-        <div class="modpack-name">${modpack.title}</div>
-        <div class="modpack-meta">by ${author} · ${downloads} downloads</div>
+        <div class="modpack-name">${modpackTitle}</div>
+        <div class="modpack-meta">by ${author} · ${downloads.toLocaleString()} downloads</div>
         <div class="modpack-description">${description}</div>
       </div>
       <div class="modpack-actions">
         <button 
           class="install-modpack ${isInstalled ? 'secondary' : ''}" 
-          data-project-id="${modpack.project_id}" 
-          data-slug="${modpack.slug}"
+          data-mod-id="${modpackId}" 
+          data-slug="${modpackSlug}"
           ${isInstalled ? 'disabled' : ''}>
           ${isInstalled ? 'Installed' : 'Install'}
         </button>
@@ -1501,14 +1519,14 @@ modpacksList.addEventListener('click', async (event) => {
   const button = event.target.closest('.install-modpack');
   if (!button || button.disabled) return;
   
-  const projectId = button.dataset.projectId;
+  const modId = button.dataset.modId;
   const slug = button.dataset.slug;
   
   try {
     button.disabled = true;
     button.textContent = 'Installing...';
     
-    await window.minecraftLauncher.installModpack({ projectId, projectSlug: slug });
+    await window.minecraftLauncher.installModpack({ projectId: modId, projectSlug: slug });
     
     button.textContent = 'Installed';
     button.classList.add('secondary');
@@ -1682,24 +1700,32 @@ async function openDetailsView(projectId, contentType = 'mod') {
     
     currentProjectDetails = { project, versions, contentType };
     
-    // Populate header
-    detailsIcon.src = project.icon_url || 'data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'96\' height=\'96\'%3E%3Crect width=\'96\' height=\'96\' fill=\'%23333\'/%3E%3C/svg%3E';
+    // Populate header - handle both Modrinth and CurseForge formats
+    const projectIcon = project.logo?.url || project.icon_url || 'data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'96\' height=\'96\'%3E%3Crect width=\'96\' height=\'96\' fill=\'%23333\'/%3E%3C/svg%3E';
+    const projectTitle = project.name || project.title || project.slug;
+    const projectAuthor = (project.authors && project.authors[0]?.name) || project.team || 'Unknown';
+    const projectDownloads = project.downloadCount || project.downloads || 0;
+    const projectUpdated = project.dateModified || project.updated || project.dateCreated;
+    const projectDescription = project.summary || project.body || project.description || 'No description available.';
+    
+    detailsIcon.src = projectIcon;
     detailsIcon.onerror = () => {
       detailsIcon.src = 'data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'96\' height=\'96\'%3E%3Crect width=\'96\' height=\'96\' fill=\'%23333\'/%3E%3C/svg%3E';
     };
     
-    detailsTitle.textContent = project.title || project.slug;
+    detailsTitle.textContent = projectTitle;
     detailsMeta.textContent = project.client_side || project.server_side ? 
       `${project.client_side ? 'Client' : ''}${project.client_side && project.server_side ? ' & ' : ''}${project.server_side ? 'Server' : ''}` : 
       contentType.charAt(0).toUpperCase() + contentType.slice(1);
     
-    // Tags
+    // Tags - handle both formats
     detailsTags.innerHTML = '';
-    if (project.categories && project.categories.length > 0) {
-      project.categories.slice(0, 5).forEach(cat => {
+    const categories = project.categories || [];
+    if (categories.length > 0) {
+      categories.slice(0, 5).forEach(cat => {
         const tag = document.createElement('span');
         tag.className = 'details-tag';
-        tag.textContent = cat;
+        tag.textContent = typeof cat === 'string' ? cat : cat.name || cat.slug || '';
         detailsTags.appendChild(tag);
       });
     }
@@ -1708,21 +1734,21 @@ async function openDetailsView(projectId, contentType = 'mod') {
     updateDetailsActionButton();
     
     // Info rows
-    detailsDownloads.textContent = (project.downloads || 0).toLocaleString();
-    detailsUpdated.textContent = project.updated ? new Date(project.updated).toLocaleDateString() : 'Unknown';
-    detailsAuthor.textContent = project.team || 'Unknown';
-    detailsVersions.textContent = `${versions.length} version${versions.length !== 1 ? 's' : ''}`;
+    detailsDownloads.textContent = projectDownloads.toLocaleString();
+    detailsUpdated.textContent = projectUpdated ? new Date(projectUpdated).toLocaleDateString() : 'Unknown';
+    detailsAuthor.textContent = projectAuthor;
+    detailsVersions.textContent = `${versions.length || 0} version${versions.length !== 1 ? 's' : ''}`;
     
-    // Get loaders from versions
-    const loaders = [...new Set(versions.flatMap(v => v.loaders || []))];
+    // Get loaders from versions - handle CurseForge format
+    const versionsArray = versions.data || versions || [];
+    const loaders = [...new Set(versionsArray.flatMap(v => v.loaders || []))];
     detailsLoaders.textContent = loaders.length > 0 ? loaders.join(', ') : 'Any';
     
     // Description (render markdown)
-    const description = project.body || project.description || 'No description available.';
-    detailsDescriptionContent.innerHTML = markdownToHtml(description);
+    detailsDescriptionContent.innerHTML = markdownToHtml(projectDescription);
     
-    // Gallery
-    currentGalleryImages = project.gallery || [];
+    // Gallery - handle screenshots
+    currentGalleryImages = project.screenshots || project.gallery || [];
     renderGallery();
     
   } catch (error) {
@@ -1730,7 +1756,7 @@ async function openDetailsView(projectId, contentType = 'mod') {
     detailsDescriptionContent.innerHTML = `<p style="color: #f44;">Error loading details: ${error.message}</p>`;
     
     if (error.message.includes('502') || error.message.includes('503')) {
-      detailsDescriptionContent.innerHTML = '<p style="color: #f44;">Modrinth is temporarily unavailable. Please try again later.</p>';
+      detailsDescriptionContent.innerHTML = '<p style="color: #f44;">CurseForge API is temporarily unavailable. Please try again later.</p>';
     }
   }
 }
@@ -1778,8 +1804,9 @@ function renderGallery() {
   currentGalleryImages.forEach((image, index) => {
     const img = document.createElement('img');
     img.className = 'details-gallery-item';
-    img.src = image.url;
-    img.alt = image.title || `Screenshot ${index + 1}`;
+    // Handle both CurseForge (thumbnailUrl, url) and Modrinth (url) formats
+    img.src = image.thumbnailUrl || image.url;
+    img.alt = image.title || image.description || `Screenshot ${index + 1}`;
     img.loading = 'lazy';
     
     img.onerror = () => {

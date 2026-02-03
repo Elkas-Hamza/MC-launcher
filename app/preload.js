@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('minecraftLauncher', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   searchModrinth: (payload) => ipcRenderer.invoke('search-modrinth', payload),
   searchModrinthShaders: (payload) => ipcRenderer.invoke('search-modrinth-shaders', payload),
+  searchResourcepacks: (payload) => ipcRenderer.invoke('search-resourcepacks', payload),
   installMod: (payload) => ipcRenderer.invoke('install-mod', payload),
   listInstalledMods: (profileName) => ipcRenderer.invoke('list-installed-mods', profileName),
   removeMod: (payload) => ipcRenderer.invoke('remove-mod', payload),

@@ -1,9 +1,9 @@
 {
   "name": "mclauncher",
   "version": "2.1.1",
-  "description": "Minecraft launcher built by Elkas-hamza",
+  "description": "Minecraft launcher",
   "main": "app/main.js",
-  "author": "",
+  "author": "Elkas-hamza",
   "license": "MIT",
   "type": "commonjs",
   "scripts": {
@@ -50,6 +50,7 @@
   },
   "dependencies": {
     "adm-zip": "^0.5.10",
+    "dotenv": "^17.2.3",
     "lzma": "^2.3.2"
   },
   "devDependencies": {
